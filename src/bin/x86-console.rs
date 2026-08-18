@@ -2,10 +2,12 @@ use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 
 use x86::{Bootloader, Image, ImageKind, Machine, MachineConfig, Resource, SavedState, X86Error};
+#[cfg(feature = "native-runtime")]
+use x86::NativeBackend;
 
 fn print_help() {
     println!(
-        "Commands:\n  help                         Show this help\n  capabilities                Show native capabilities\n  info                        Show machine configuration and attached images\n  config ram <bytes>          Set guest RAM size\n  config vga <bytes>          Set VGA memory size\n  load bios <path>             Load BIOS image\n  load vga-bios <path>         Load VGA BIOS image\n  load disk <path>             Load raw disk image\n  load cdrom <path>            Load ISO/CD-ROM image\n  load state <path>            Load v86 saved state (.bin or .bin.zst)\n  load bootloader <path|url>   Load a bootloader from disk or HTTP(S)\n  checksum <kind>              Print SHA-256 for bios/vga-bios/disk/cdrom/bootloader/state\n  prepare                     Validate backend readiness\n  run                         Run the attached native backend\n  quit                        Exit"
+        "Commands:\n  help                         Show this help\n  capabilities                Show native capabilities\n  info                        Show machine configuration and attached images\n  config ram <bytes>          Set guest RAM size\n  config vga <bytes>          Set VGA memory size\n  load bios <path>             Load BIOS image\n  load vga-bios <path>         Load VGA BIOS image\n  load disk <path>             Load raw disk image\n  load cdrom <path>            Load ISO/CD-ROM image\n  load state <path>            Load v86 saved state (.bin or .bin.zst)\n  load bootloader <path|url>   Load a bootloader from disk or HTTP(S)\n  checksum <kind>              Print SHA-256 for bios/vga-bios/disk/cdrom/bootloader/state\n  prepare                     Validate backend readiness\n  run                         Run the attached native backend\n  run-state [max_steps]       Restore and run the loaded v86 saved state\n  quit                        Exit"
     );
 }
 
@@ -98,6 +100,8 @@ fn print_checksum(machine: &Machine, kind: &str) {
 
 fn main() -> Result<(), X86Error> {
     let mut machine = Machine::new(MachineConfig::default());
+    #[cfg(feature = "native-runtime")]
+    machine.attach_backend(NativeBackend::new());
     println!("x86 native console v{}", x86::API_VERSION);
     println!("No browser or WebAssembly runtime is used. Type `help` for commands.");
     print!("x86> ");
@@ -177,8 +181,8 @@ fn main() -> Result<(), X86Error> {
                     let path = parts
                         .next()
                         .ok_or_else(|| X86Error::InvalidImage("missing state path".to_owned()))?;
-                    machine.set_saved_state(SavedState::from_file(path)?);
-                    println!("saved state loaded");
+                    machine.load_saved_state(Resource::file(path))?;
+                    println!("saved state loaded; RAM configuration updated from state");
                     Ok(())
                 }
                 Some("bootloader") => {
@@ -213,17 +217,40 @@ fn main() -> Result<(), X86Error> {
                     Ok(())
                 }
             },
-            "run" => match machine.run(Default::default()) {
-                Ok(report) => {
-                    println!(
-                        "run finished: {} steps, halted={}",
-                        report.steps, report.halted
-                    );
-                    Ok(())
-                }
-                Err(error) => {
-                    println!("run unavailable: {error}");
-                    Ok(())
+            "run" | "run-state" => {
+                if command == "run-state" && machine.saved_state().is_none() {
+                    Err(X86Error::InvalidState(
+                        "load a v86 saved state before run-state".to_owned(),
+                    ))
+                } else {
+                    let max_steps = if command == "run-state" {
+                        parts
+                            .next()
+                            .map(|value| value.parse::<u64>().map_err(|error| {
+                                X86Error::InvalidImage(format!("invalid max_steps: {error}"))
+                            }))
+                            .transpose()?
+                            .or(Some(100_000))
+                    } else {
+                        None
+                    };
+                    let options = x86::RunOptions {
+                        max_steps,
+                        ..Default::default()
+                    };
+                    match machine.run(options) {
+                        Ok(report) => {
+                            println!(
+                                "run finished: {} steps, halted={}",
+                                report.steps, report.halted
+                            );
+                            Ok(())
+                        }
+                        Err(error) => {
+                            println!("run unavailable: {error}");
+                            Ok(())
+                        }
+                    }
                 }
             },
             "quit" | "exit" => break,

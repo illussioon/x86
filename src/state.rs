@@ -109,6 +109,46 @@ impl SavedState {
             .and_then(Value::as_u64)
     }
 
+    /// Return the raw v86 state array and typed buffers in buffer_id order.
+    /// The buffers are copied out of the decoded state so callers can safely
+    /// hand them to a native backend with its own lifetime.
+    pub fn cpu_state_and_buffers(&self) -> Result<(Value, Vec<Vec<u8>>)> {
+        let state = self
+            .metadata
+            .get("state")
+            .cloned()
+            .ok_or_else(|| X86Error::InvalidState("missing state array".to_owned()))?;
+        let infos = self
+            .metadata
+            .get("buffer_infos")
+            .and_then(Value::as_array)
+            .ok_or_else(|| X86Error::InvalidState("missing buffer_infos array".to_owned()))?;
+        let buffer_block_start = (STATE_HEADER_LEN + self.header.metadata_length as usize + 3) & !3;
+        let mut buffers = Vec::with_capacity(infos.len());
+        for (index, info) in infos.iter().enumerate() {
+            let offset = info
+                .get("offset")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| X86Error::InvalidState(format!("buffer_infos[{index}] has no offset")))? as usize;
+            let length = info
+                .get("length")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| X86Error::InvalidState(format!("buffer_infos[{index}] has no length")))? as usize;
+            let start = buffer_block_start
+                .checked_add(offset)
+                .ok_or_else(|| X86Error::InvalidState("buffer offset overflow".to_owned()))?;
+            let end = start
+                .checked_add(length)
+                .ok_or_else(|| X86Error::InvalidState("buffer length overflow".to_owned()))?;
+            let bytes = self
+                .decoded
+                .get(start..end)
+                .ok_or_else(|| X86Error::InvalidState(format!("buffer {index} exceeds decoded state")))?;
+            buffers.push(bytes.to_vec());
+        }
+        Ok((state, buffers))
+    }
+
     pub fn sha256(&self) -> String {
         let mut hasher = Sha256::new();
         hasher.update(&self.decoded);

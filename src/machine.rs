@@ -109,6 +109,13 @@ pub struct RunReport {
 
 pub trait ExecutionBackend: Send {
     fn reset(&mut self, config: &MachineConfig) -> Result<()>;
+
+    /// Restore an attached v86 saved state after reset. Backends that do not
+    /// support saved states may keep the default no-op implementation.
+    fn restore_state(&mut self, _state: &SavedState) -> Result<()> {
+        Ok(())
+    }
+
     fn step(&mut self) -> Result<bool>;
     fn read_memory(&self, address: u64, buffer: &mut [u8]) -> Result<()>;
     fn write_memory(&mut self, address: u64, data: &[u8]) -> Result<()>;
@@ -215,6 +222,9 @@ impl Machine {
     }
 
     pub fn set_saved_state(&mut self, state: SavedState) {
+        if let Some(memory_bytes) = state.memory_bytes() {
+            self.config.ram_bytes = memory_bytes;
+        }
         self.saved_state = Some(state);
     }
 
@@ -232,7 +242,11 @@ impl Machine {
             .bytes()
             .to_vec(),
         };
-        self.saved_state = Some(SavedState::from_bytes(state_bytes)?);
+        let state = SavedState::from_bytes(state_bytes)?;
+        if let Some(memory_bytes) = state.memory_bytes() {
+            self.config.ram_bytes = memory_bytes;
+        }
+        self.saved_state = Some(state);
         Ok(())
     }
 
@@ -267,7 +281,11 @@ impl Machine {
                     .to_owned(),
             ));
         }
-        self.backend.as_mut().unwrap().reset(&self.config)?;
+        let backend = self.backend.as_mut().unwrap();
+        backend.reset(&self.config)?;
+        if let Some(state) = self.saved_state.as_ref() {
+            backend.restore_state(state)?;
+        }
         self.status = MachineStatus::Ready;
         Ok(())
     }

@@ -9,6 +9,9 @@ pub mod image;
 pub mod machine;
 pub mod state;
 
+#[cfg(feature = "native-runtime")]
+pub mod native_backend;
+
 pub use bootloader::{Bootloader, FetchOptions, Resource, copy_resource_to, load_resource};
 pub use error::{Result, X86Error};
 pub use image::{Image, ImageKind};
@@ -17,6 +20,9 @@ pub use machine::{
     RunOptions, RunReport,
 };
 pub use state::{SavedState, StateHeader, StateSummary};
+
+#[cfg(feature = "native-runtime")]
+pub use native_backend::NativeBackend;
 
 pub const API_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -30,6 +36,7 @@ pub fn native_capabilities() -> &'static [&'static str] {
         "saved-state-v86-v6",
         "console-host-api",
         "backend-trait",
+        "native-v86-interpreter",
         "no-webassembly-runtime",
     ]
 }

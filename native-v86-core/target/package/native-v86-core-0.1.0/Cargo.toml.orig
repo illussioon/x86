@@ -1,0 +1,40 @@
+[package]
+name = "native-v86-core"
+version = "0.1.0"
+edition = "2021"
+authors = ["x86 contributors"]
+description = "Native Rust x86 CPU interpreter core ported from v86"
+license = "BSD-2-Clause OR MIT"
+repository = "https://github.com/illussioon/x86"
+
+[features]
+default = ["native-interpreter"]
+profiler = []
+native-interpreter = []
+
+[dependencies]
+serde_json = "1.0"
+
+[build-dependencies]
+cc = "1.0"
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+path = "src/lib.rs"
+
+[profile.test]
+lto = false
+opt-level = 2
+overflow-checks = false
+
+[profile.dev]
+lto = true
+opt-level = 2
+panic = "abort"
+overflow-checks = false
+
+[profile.release]
+lto = true
+opt-level = 3
+incremental = false
+panic = "abort"

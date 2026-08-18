@@ -1,6 +1,6 @@
 [package]
 name = "x86-native"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["x86 contributors"]
 edition = "2024"
 rust-version = "1.85"
@@ -21,9 +21,10 @@ name = "x86-console"
 path = "src/bin/x86-console.rs"
 
 [features]
-default = ["remote", "zstd"]
+default = ["remote", "zstd", "native-runtime"]
 remote = ["dep:ureq"]
 zstd = ["dep:zstd"]
+native-runtime = ["dep:native-v86-core"]
 
 [dependencies]
 thiserror = "2"
@@ -33,6 +34,7 @@ sha2 = "0.10"
 hex = "0.4"
 ureq = { version = "2.9.7", optional = true, default-features = false, features = ["tls"] }
 zstd = { version = "0.13", optional = true }
+native-v86-core = { package = "native-v86-core", version = "0.1.0", path = "native-v86-core", optional = true, features = ["native-interpreter"] }
 
 [dev-dependencies]
 tempfile = "3"
