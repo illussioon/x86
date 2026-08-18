@@ -1,2 +1,4 @@
 /target
 /release-staging
+/release-staging*/
+/release-v011-artifacts/
