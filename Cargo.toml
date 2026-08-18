@@ -1,5 +1,5 @@
 [package]
-name = "x86"
+name = "x86-native"
 version = "0.1.0"
 authors = ["x86 contributors"]
 edition = "2024"
