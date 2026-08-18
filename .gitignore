@@ -2,3 +2,10 @@
 /release-staging
 /release-staging*/
 /release-v011-artifacts/
+
+**/target
+*.crate
+macos-bundle/
+x86-native-macos-arch-*.zip
+/tools/arch_cpu_slots.txt
+/tools/inspect_cpu_slots.py
