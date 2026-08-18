@@ -1,0 +1,29 @@
+flowchart LR
+    App[Native Rust application]
+    Console[x86-console]
+    API[x86 public API]
+    Config[MachineConfig]
+    Resources[Resource loader]
+    Images[Image: BIOS / disk / ISO / initrd]
+    State[SavedState: raw or zstd]
+    Boot[Bootloader]
+    Backend[ExecutionBackend trait]
+    CPU[Native CPU backend]
+    Devices[Native devices and memory]
+    Platform[Linux / macOS / Windows adapters]
+    Cargo[Cargo package x86-native]
+
+    App --> API
+    Console --> API
+    Cargo --> API
+    API --> Config
+    API --> Resources
+    Resources --> Images
+    Resources --> State
+    Resources --> Boot
+    API --> Backend
+    Backend --> CPU
+    Backend --> Devices
+    Platform --> Console
+    Platform --> Resources
+    CPU --> Devices

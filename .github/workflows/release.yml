@@ -1,0 +1,87 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            library: libx86.so
+            console: x86-console
+            console_output: x86-console-linux-x86_64
+          - name: macos-x86_64
+            os: macos-13
+            target: x86_64-apple-darwin
+            library: libx86.dylib
+            console: x86-console
+            console_output: x86-console-macos-x86_64
+          - name: macos-aarch64
+            os: macos-14
+            target: aarch64-apple-darwin
+            library: libx86.dylib
+            console: x86-console
+            console_output: x86-console-macos-aarch64
+          - name: windows-x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            library: x86.dll
+            console: x86-console.exe
+            console_output: x86-console-windows-x86_64.exe
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --target ${{ matrix.target }}
+      - run: cargo build --release --target ${{ matrix.target }}
+      - name: Stage release files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          cp "target/${{ matrix.target }}/release/${{ matrix.console }}" "release/${{ matrix.console_output }}"
+          cp "target/${{ matrix.target }}/release/${{ matrix.library }}" "release/${{ matrix.library }}-${{ matrix.name }}"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum release/* > "release/SHA256SUMS-${{ matrix.name }}.txt"
+          else
+            shasum -a 256 release/* > "release/SHA256SUMS-${{ matrix.name }}.txt"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.name }}
+          path: release/
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release
+          merge-multiple: true
+      - name: Package source
+        run: tar --exclude='./target' --exclude='./dist' --exclude='./release' --exclude='./.git' -czf x86-native-source-${GITHUB_REF_NAME}.tar.gz .
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            release/*
+            x86-native-source-${{ github.ref_name }}.tar.gz

@@ -1,18 +1,73 @@
-# x86
+# x86-native
 
-`x86` is a cross-platform native Rust library for hosting an x86 machine implementation. The crate is designed for Linux, macOS, Windows, BSD and other Rust-supported native targets. It has no browser, DOM or WebAssembly runtime dependency.
+[![Crates.io](https://img.shields.io/crates/v/x86-native.svg)](https://crates.io/crates/x86-native)
+[![Documentation](https://img.shields.io/docsrs/x86-native)](https://docs.rs/x86-native)
+[![CI](https://github.com/illussioon/x86/actions/workflows/ci.yml/badge.svg)](https://github.com/illussioon/x86/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/illussioon/x86)](https://github.com/illussioon/x86/releases)
+[![License](https://img.shields.io/badge/license-BSD--2--Clause%20OR%20MIT-blue.svg)](LICENSE)
 
-## Manifest
+**x86-native** is a cross-platform native Rust library for building x86 machine hosts without a browser, DOM, WebAssembly runtime or web frontend. The package name on crates.io is `x86-native`; the Rust library target remains `x86`, so applications use `use x86::...`.
 
-The package manifest includes `name`, `version`, `authors`, `description`, `license`, keywords and a placeholder for the repository URL. Replace the commented `repository` line in `Cargo.toml` with your repository before publishing.
+> **Project status:** the native resource and machine-host API is implemented and tested. `ExecutionBackend` is the stable boundary for the future CPU, memory, interrupt and device implementation. The current release does not pretend that a metadata/state loader is already a complete PC emulator.
+
+## Languages
+
+| Language | Documentation |
+| --- | --- |
+| English | [English guide](docs/en/README.md) |
+| Русский | [Русская документация](docs/ru/README.md) |
+| Українська | [Українська документація](docs/uk/README.md) |
+
+The [documentation index](docs/README.md) contains the API map, examples, architecture diagrams, console screenshots and release notes.
+
+## Install from Cargo
+
+Add the package to your application:
+
+```toml
+[dependencies]
+x86-native = "0.1"
+```
+
+Then import the library target as `x86`:
+
+```rust
+use x86::{Image, ImageKind, Machine, MachineConfig};
+
+fn main() -> x86::Result<()> {
+    let mut machine = Machine::new(
+        MachineConfig::default().with_ram_bytes(512 * 1024 * 1024),
+    );
+
+    machine.set_disk(Image::from_file(ImageKind::RawDisk, "disk.img")?)?;
+    println!("machine status: {:?}", machine.status());
+    Ok(())
+}
+```
+
+The package is designed for stable Rust and native targets supported by Cargo. Run `cargo add x86-native` or edit `Cargo.toml` manually as shown above.
 
 ## Features
 
-The public API covers the native resources needed by an x86 machine host. `Image` represents BIOS, VGA BIOS, raw disks, ISO images, kernels, initrds, bootloaders and other byte resources. `Resource` loads data from memory, a local path or, when the default `remote` feature is enabled, HTTP(S). `SavedState` validates and reads v86-compatible version-6 state files, including Zstandard-compressed files when the default `zstd` feature is enabled. `MachineConfig` and `Machine` collect resources and expose a platform-neutral lifecycle. `ExecutionBackend` is the native CPU/device boundary that the actual emulator core will implement.
+| Feature | Default | Purpose |
+| --- | ---: | --- |
+| `remote` | yes | Native HTTP(S) resource loading through Rust networking code. It does not open a browser. |
+| `zstd` | yes | Decode Zstandard-compressed saved states. |
+| `--no-default-features` | no | Offline/local-only build with no remote loader and no zstd decoder. |
 
-> The current package is the native library and host API layer. It deliberately does not pretend that a metadata loader is a complete x86 CPU/device emulator. An actual execution backend must implement CPU, memory, interrupts, timers, VGA, storage, network and other devices behind `ExecutionBackend`.
+For a strictly offline build:
 
-## Rust API example
+```bash
+cargo build --no-default-features
+```
+
+## Main API
+
+The `Image` type represents BIOS, VGA BIOS, raw disks, ISO images, kernels, initrds, bootloaders and memory-backed resources. It supports local file loading, SHA-256 calculation and checksum verification.
+
+`Resource` and `Bootloader` provide a single interface for local paths, in-memory bytes and optional HTTP(S) URLs. `SavedState` validates v86-compatible state headers, metadata, buffer counts, memory size and compressed state data.
+
+`MachineConfig` describes RAM, VGA memory, CPU frequency hints, command line and console mode. `Machine` attaches the machine resources and exposes `prepare`, `run` and `stop`. `ExecutionBackend` is a platform-neutral trait for connecting the actual native CPU/device engine.
 
 ```rust,no_run
 use x86::{Bootloader, Image, ImageKind, Machine, MachineConfig, Resource, SavedState};
@@ -28,61 +83,81 @@ fn main() -> x86::Result<()> {
     machine.set_vga_bios(Image::from_file(ImageKind::VgaBios, "vgabios.bin")?)?;
     machine.set_disk(Image::from_file(ImageKind::RawDisk, "disk.img")?)?;
     machine.set_saved_state(SavedState::from_file("state.bin.zst")?);
-
-    let bootloader = Bootloader::load(Resource::url(
+    machine.set_bootloader(Bootloader::load(Resource::url(
         "https://example.org/bootloader.bin",
-    ))?;
-    machine.set_bootloader(bootloader);
+    ))?);
 
     println!("state: {:?}", machine.status());
     Ok(())
 }
 ```
 
-For an offline-only build, disable both optional capabilities:
-
-```bash
-cargo build --no-default-features
-```
-
-In that mode the library still supports memory and local-file resources, but URL loading and `.zst` state decoding return explicit typed errors instead of requiring a network or decompression backend.
-
 ## Native console
 
-The `x86-console` binary is a normal terminal process. It does not open a browser or start a web server:
+Build and launch the terminal application:
 
 ```bash
 cargo run --bin x86-console
 ```
 
-Inside the console:
+The console is a normal native process. It does not start a web server or require a browser:
 
 ```text
-load bios seabios.bin
-load vga-bios vgabios.bin
-load disk disk.img
-load state arch_state-v3.bin.zst
-load bootloader https://example.org/bootloader.bin
-info
-checksum state
-prepare
-quit
+x86> load bios seabios.bin
+x86> load vga-bios vgabios.bin
+x86> load disk disk.img
+x86> load state arch_state-v3.bin.zst
+x86> load bootloader https://example.org/bootloader.bin
+x86> info
+x86> checksum state
+x86> prepare
+x86> run
+x86> quit
 ```
 
-`prepare` and `run` require an `ExecutionBackend` implementation. Without one, the console reports a typed `BackendUnavailable` error rather than silently claiming that a guest was executed.
+`prepare` and `run` return a typed `BackendUnavailable` error until an `ExecutionBackend` is attached. This is intentional: the library never reports a guest as running when no CPU/device backend exists.
 
-## Platform builds
+## Architecture
 
-The crate uses stable Rust and platform-neutral standard library APIs. The normal commands are:
+![x86-native architecture](docs/assets/architecture.png)
+
+The source diagram is available as [`docs/assets/architecture.mmd`](docs/assets/architecture.mmd). The host layer is platform-neutral; platform-specific console, filesystem and networking adapters remain outside the core API.
+
+## Releases
+
+The [GitHub Releases page](https://github.com/illussioon/x86/releases) contains versioned native artifacts and source packages. The release workflow is configured to build Linux, macOS Intel, macOS Apple Silicon and Windows artifacts when a version tag is pushed.
+
+| Target | Typical artifact | Build target |
+| --- | --- | --- |
+| Linux x86_64 | `x86-console-linux-x86_64`, `libx86-linux-x86_64.so` | `x86_64-unknown-linux-gnu` |
+| macOS Intel | `x86-console-macos-x86_64`, `libx86-macos-x86_64.dylib` | `x86_64-apple-darwin` |
+| macOS Apple Silicon | `x86-console-macos-aarch64`, `libx86-macos-aarch64.dylib` | `aarch64-apple-darwin` |
+| Windows x86_64 | `x86-console-windows-x86_64.exe`, `x86-windows-x86_64.dll` | `x86_64-pc-windows-msvc` |
+
+## Build from source
 
 ```bash
+git clone https://github.com/illussioon/x86.git
+cd x86
 cargo check
 cargo test
+cargo package
+cargo run --bin x86-console
+```
+
+For native release builds:
+
+```bash
 cargo build --release
 ```
 
-For Windows from a Windows host, use `cargo build --release`. For macOS, use the native Apple target supplied by `rustup`; for Linux, use the native Linux target. Cross-compilation can use any Rust target supported by the installed toolchain.
+## License
 
-## License and repository
+Licensed under either of [BSD-2-Clause](LICENSE) or [MIT](LICENSE.MIT), at your option.
 
-The default license expression is `BSD-2-Clause OR MIT`. Add the project repository URL to `Cargo.toml` when you decide where to publish it.
+## References
+
+The API follows standard Cargo package conventions [1] and uses the repository's native Rust implementation as the source of truth [2].
+
+[1]: https://doc.rust-lang.org/cargo/
+[2]: https://github.com/illussioon/x86
