@@ -35,3 +35,7 @@ The project keeps the package name `x86-native` because `x86` is already occupie
 ```rust
 use x86::{Machine, MachineConfig};
 ```
+
+## Runner references
+
+The release workflow uses `macos-15-intel` for Intel builds because GitHub retired `macos-13`. Apple Silicon builds use `macos-14`. See the [GitHub-hosted runners reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners) and the [macOS 15 Intel runner announcement](https://github.com/actions/runner-images/issues/13045).

@@ -23,7 +23,7 @@ jobs:
             console: x86-console
             console_output: x86-console-linux-x86_64
           - name: macos-x86_64
-            os: macos-13
+            os: macos-15-intel
             target: x86_64-apple-darwin
             library: libx86.dylib
             console: x86-console
