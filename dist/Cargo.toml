@@ -1,0 +1,44 @@
+[package]
+name = "x86"
+version = "0.1.0"
+authors = ["x86 contributors"]
+edition = "2024"
+rust-version = "1.85"
+description = "Cross-platform native x86 machine library with image, bootloader, and saved-state APIs"
+license = "BSD-2-Clause OR MIT"
+# Add your repository URL here before publishing:
+# repository = "https://github.com/your-user/your-repository"
+keywords = ["x86", "emulator", "machine", "disk-image", "bootloader"]
+categories = ["emulators", "hardware-support"]
+
+[lib]
+name = "x86"
+path = "src/lib.rs"
+crate-type = ["rlib", "cdylib", "staticlib"]
+
+[[bin]]
+name = "x86-console"
+path = "src/bin/x86-console.rs"
+
+[features]
+default = ["remote", "zstd"]
+remote = ["dep:ureq"]
+zstd = ["dep:zstd"]
+
+[dependencies]
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+hex = "0.4"
+ureq = { version = "2.9.7", optional = true, default-features = false, features = ["tls"] }
+zstd = { version = "0.13", optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"
