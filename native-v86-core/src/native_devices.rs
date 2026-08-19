@@ -135,6 +135,16 @@ pub fn restore_state(state: &serde_json::Value, buffers: &[Vec<u8>]) -> Result<(
 }
 
 pub fn io_read8(port: i32) -> Option<i32> {
+    if (VIRTIO_9P_ISR..VIRTIO_9P_ISR + 4).contains(&port) {
+        let value = {
+            let mut b = bus().lock().ok()?;
+            let value = b.ninep.isr;
+            b.ninep.isr = 0;
+            value
+        };
+        unsafe { crate::cpu::cpu::device_lower_irq(9) };
+        return Some(value as i32);
+    }
     let b = bus().lock().ok()?;
     if (PCI_CONFIG_ADDRESS..PCI_CONFIG_ADDRESS + 4).contains(&port) {
         return Some(((b.pci_address >> (8 * (port - PCI_CONFIG_ADDRESS))) & 0xFF) as i32);
@@ -142,9 +152,6 @@ pub fn io_read8(port: i32) -> Option<i32> {
     if (PCI_CONFIG_DATA..PCI_CONFIG_DATA + 4).contains(&port) {
         let value = pci_config_read(b.pci_address);
         return Some(((value >> (8 * (port - PCI_CONFIG_DATA))) & 0xFF) as i32);
-    }
-    if (VIRTIO_9P_ISR..VIRTIO_9P_ISR + 4).contains(&port) {
-        return Some(b.ninep.isr as i32);
     }
     if (VIRTIO_9P_CONFIG..VIRTIO_9P_CONFIG + 8).contains(&port) {
         let off = port - VIRTIO_9P_CONFIG;
@@ -300,11 +307,69 @@ fn pci_config_read(address: u32) -> u32 {
     if address & 0x8000_0000 == 0 || (address >> 11) & 0x1F != 0 {
         return 0xFFFF_FFFF;
     }
-    match (address >> 2) & 0x3F {
-        0 => 0x1009_1AF4,
-        2 => 0x0180_0000,
-        4 => 0x0000_A001,
-        8 => 0xFF00_0000,
+    let offset = ((address >> 2) & 0x3F) * 4;
+    match offset {
+        0x00 => 0x1009_1AF4,
+        0x08 => 0x0180_0000,
+        0x10 => 0x0000_A001,
+        0x14 => 0x0000_A101,
+        0x18 => 0x0000_A201,
+        0x1C => 0x0000_A301,
+        0x34 => 0x0000_0040,
+        // VirtIO common configuration capability: BAR0, offset 0, size 0x38.
+        0x40 => 0x0110_5009,
+        0x44 => 0,
+        0x48 => 0,
+        0x4C => 0x0000_0038,
+        // VirtIO notification capability: BAR1, offset 0, size 0x20,
+        // notify_off_multiplier = 4.
+        0x50 => 0x0214_6009,
+        0x54 => 1,
+        0x58 => 0,
+        0x5C => 0x0000_0020,
+        0x60 => 4,
+        // VirtIO ISR capability: BAR2, offset 0, one-byte region.
+        0x64 => 0x0310_7409,
+        0x68 => 2,
+        0x6C => 0,
+        0x70 => 1,
+        // VirtIO device-specific capability: BAR3, offset 0.
+        0x74 => 0x0410_8409,
+        0x78 => 3,
+        0x7C => 0,
+        0x80 => 0x0000_0100,
+        // Terminating PCI configuration capability.
+        0x84 => 0x0510_0009,
+        0x88 => 0,
+        0x8C => 0,
+        0x90 => 0,
+        0x94 => 0,
+        0x98 => 0,
+        0x9C => 0,
+        0xA0 => 0,
+        0xA4 => 0,
+        0xA8 => 0,
+        0xAC => 0,
+        0xB0 => 0,
+        0xB4 => 0,
+        0xB8 => 0,
+        0xBC => 0,
+        0xC0 => 0,
+        0xC4 => 0,
+        0xC8 => 0,
+        0xCC => 0,
+        0xD0 => 0,
+        0xD4 => 0,
+        0xD8 => 0,
+        0xDC => 0,
+        0xE0 => 0,
+        0xE4 => 0,
+        0xE8 => 0,
+        0xEC => 0,
+        0xF0 => 0,
+        0xF4 => 0,
+        0xF8 => 0,
+        0xFC => 0,
         _ => 0,
     }
 }
@@ -380,6 +445,9 @@ fn process_queue() {
         write16(q.used + 2, used_idx.wrapping_add(1));
         q.avail_last = q.avail_last.wrapping_add(1);
         b.ninep.isr |= 1;
+        // v86 routes the legacy VirtIO 9P interrupt through IRQ9.  Use the
+        // CPU's combined PIC/IOAPIC path so an HLT guest is woken correctly.
+        unsafe { crate::cpu::cpu::device_raise_irq(9) };
     }
     b.ninep.queue.avail_last = q.avail_last;
 }
@@ -589,6 +657,19 @@ mod pci_tests {
         assert!(io_write32(PCI_CONFIG_ADDRESS, 0x8000_0010u32 as i32).to_owned());
         let bar = io_read32(PCI_CONFIG_DATA).expect("PCI BAR");
         assert_eq!(bar as u32, 0x0000_A001);
+
+        assert!(io_write32(PCI_CONFIG_ADDRESS, 0x8000_0034u32 as i32));
+        assert_eq!(io_read32(PCI_CONFIG_DATA).unwrap() as u32, 0x40);
+        assert!(io_write32(PCI_CONFIG_ADDRESS, 0x8000_0040u32 as i32));
+        assert_eq!(io_read32(PCI_CONFIG_DATA).unwrap() as u32, 0x0110_5009);
+        assert!(io_write32(PCI_CONFIG_ADDRESS, 0x8000_0050u32 as i32));
+        assert_eq!(io_read32(PCI_CONFIG_DATA).unwrap() as u32, 0x0214_6009);
+        assert!(io_write32(PCI_CONFIG_ADDRESS, 0x8000_0054u32 as i32));
+        assert_eq!(io_read32(PCI_CONFIG_DATA).unwrap() as u32, 1);
+        assert!(io_write32(PCI_CONFIG_ADDRESS, 0x8000_0064u32 as i32));
+        assert_eq!(io_read32(PCI_CONFIG_DATA).unwrap() as u32, 0x0310_7409);
+        assert!(io_write32(PCI_CONFIG_ADDRESS, 0x8000_0074u32 as i32));
+        assert_eq!(io_read32(PCI_CONFIG_DATA).unwrap() as u32, 0x0410_8409);
     }
 
     #[test]
