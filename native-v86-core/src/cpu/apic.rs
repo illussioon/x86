@@ -103,10 +103,14 @@ static APIC: Mutex<Apic> = Mutex::new(Apic {
     read_error: 0,
 });
 
-pub fn get_apic() -> MutexGuard<'static, Apic> { APIC.try_lock().unwrap() }
+pub fn get_apic() -> MutexGuard<'static, Apic> {
+    APIC.try_lock().unwrap()
+}
 
 #[no_mangle]
-pub fn get_apic_addr() -> u32 { &raw mut *get_apic() as u32 }
+pub fn get_apic_addr() -> u32 {
+    &raw mut *get_apic() as u32
+}
 
 pub fn read32(addr: u32) -> u32 {
     if unsafe { !*acpi_enabled } {
@@ -120,20 +124,20 @@ fn read32_internal(apic: &mut Apic, addr: u32) -> u32 {
         0x20 => {
             dbg_log!("APIC read id");
             apic.apic_id
-        },
+        }
 
         0x30 => {
             // version
             dbg_log!("APIC read version");
             0x50014
-        },
+        }
 
         0x80 => {
             if APIC_LOG_VERBOSE {
                 dbg_log!("APIC read tpr");
             }
             apic.tpr
-        },
+        }
 
         0xB0 => {
             // write-only (written by DSL)
@@ -141,17 +145,17 @@ fn read32_internal(apic: &mut Apic, addr: u32) -> u32 {
                 dbg_log!("APIC read eoi register");
             }
             0
-        },
+        }
 
         0xD0 => {
             dbg_log!("Read local destination");
             apic.local_destination
-        },
+        }
 
         0xE0 => {
             dbg_log!("Read destination format");
             apic.destination_format
-        },
+        }
 
         0xF0 => apic.spurious_vector,
 
@@ -159,79 +163,79 @@ fn read32_internal(apic: &mut Apic, addr: u32) -> u32 {
             let index = ((addr - 0x100) >> 4) as usize;
             dbg_log!("Read isr {}: {:08x}", index, apic.isr[index] as u32);
             apic.isr[index]
-        },
+        }
 
         0x180 | 0x190 | 0x1A0 | 0x1B0 | 0x1C0 | 0x1D0 | 0x1E0 | 0x1F0 => {
             let index = ((addr - 0x180) >> 4) as usize;
             dbg_log!("Read tmr {}: {:08x}", index, apic.tmr[index] as u32);
             apic.tmr[index]
-        },
+        }
 
         0x200 | 0x210 | 0x220 | 0x230 | 0x240 | 0x250 | 0x260 | 0x270 => {
             let index = ((addr - 0x200) >> 4) as usize;
             dbg_log!("Read irr {}: {:08x}", index, apic.irr[index] as u32);
             apic.irr[index]
-        },
+        }
 
         0x280 => {
             dbg_log!("Read error: {:08x}", apic.read_error);
             apic.read_error
-        },
+        }
 
         0x300 => {
             if APIC_LOG_VERBOSE {
                 dbg_log!("APIC read icr0");
             }
             apic.icr0
-        },
+        }
 
         0x310 => {
             dbg_log!("APIC read icr1");
             apic.icr1
-        },
+        }
 
         0x320 => {
             if APIC_LOG_VERBOSE {
                 dbg_log!("read timer lvt");
             }
             apic.lvt_timer
-        },
+        }
 
         0x330 => {
             dbg_log!("read lvt thermal sensor");
             apic.lvt_thermal_sensor
-        },
+        }
 
         0x340 => {
             dbg_log!("read lvt perf counter");
             apic.lvt_perf_counter
-        },
+        }
 
         0x350 => {
             dbg_log!("read lvt int0");
             apic.lvt_int0
-        },
+        }
 
         0x360 => {
             dbg_log!("read lvt int1");
             apic.lvt_int1
-        },
+        }
 
         0x370 => {
             dbg_log!("read lvt error");
             apic.lvt_error
-        },
+        }
 
         0x3E0 => {
             // divider
             dbg_log!("read timer divider");
             apic.timer_divider
-        },
+        }
 
         0x380 => {
             dbg_log!("read timer initial count");
             apic.timer_initial_count
-        },
+        }
 
         0x390 => {
             let now = unsafe { js::microtick() };
@@ -246,17 +250,14 @@ fn read32_internal(apic: &mut Apic, addr: u32) -> u32 {
             let diff_in_ticks = diff_in_ticks as u64;
             let result = if diff_in_ticks < apic.timer_initial_count as u64 {
                 apic.timer_initial_count - diff_in_ticks as u32
-            }
-            else {
+            } else {
                 let mode = apic.lvt_timer & APIC_TIMER_MODE_MASK;
                 if mode == APIC_TIMER_MODE_PERIODIC {
                     apic.timer_initial_count
                         - (diff_in_ticks % (apic.timer_initial_count as u64 + 1)) as u32
-                }
-                else if mode == APIC_TIMER_MODE_ONE_SHOT {
+                } else if mode == APIC_TIMER_MODE_ONE_SHOT {
                     0
-                }
-                else {
+                } else {
                     dbg_assert!(false, "apic unimplemented timer mode: {:x}", mode);
                     0
                 }
@@ -265,13 +266,13 @@ fn read32_internal(apic: &mut Apic, addr: u32) -> u32 {
                 dbg_log!("read timer current count: {}", result);
             }
             result
-        },
+        }
 
         _ => {
             dbg_log!("APIC read {:x}", addr);
             dbg_assert!(false);
             0
-        },
+        }
     }
 }
 
@@ -287,19 +288,19 @@ fn write32_internal(apic: &mut Apic, addr: u32, value: u32) {
         0x20 => {
             dbg_log!("APIC write id: {:08x}", value >> 8);
             apic.apic_id = value;
-        },
+        }
 
         0x30 => {
             // version
             dbg_log!("APIC write version: {:08x}, ignored", value);
-        },
+        }
 
         0x80 => {
             if APIC_LOG_VERBOSE {
                 dbg_log!("Set tpr: {:02x}", value & 0xFF);
             }
             apic.tpr = value & 0xFF;
-        },
+        }
 
         0xB0 => {
             if let Some(highest_isr) = highest_isr(apic) {
@@ -311,33 +312,32 @@ fn write32_internal(apic: &mut Apic, addr: u32, value: u32) {
                     // Send eoi to all IO APICs
                     ioapic::remote_eoi(apic, highest_isr);
                 }
-            }
-            else {
+            } else {
                 dbg_log!("Bad eoi: No isr set");
             }
-        },
+        }
 
         0xD0 => {
             dbg_log!("Set local destination: {:08x}", value);
             apic.local_destination = value & 0xFF000000;
-        },
+        }
 
         0xE0 => {
             dbg_log!("Set destination format: {:08x}", value);
             apic.destination_format = value | 0xFFFFFF;
-        },
+        }
 
         0xF0 => {
             dbg_log!("Set spurious vector: {:08x}", value);
             apic.spurious_vector = value;
-        },
+        }
 
         0x280 => {
             // updated readable error register with real error
             dbg_log!("Write error: {:08x}", value);
             apic.read_error = apic.error;
             apic.error = 0;
-        },
+        }
 
         0x300 => {
             let vector = (value & 0xFF) as u8;
@@ -370,27 +370,23 @@ fn write32_internal(apic: &mut Apic, addr: u32, value: u32) {
                     destination,
                     destination_mode,
                 );
-            }
-            else if destination_shorthand == 1 {
+            } else if destination_shorthand == 1 {
                 // self
                 deliver(apic, vector, IOAPIC_DELIVERY_FIXED, is_level);
-            }
-            else if destination_shorthand == 2 {
+            } else if destination_shorthand == 2 {
                 // all including self
                 deliver(apic, vector, delivery_mode, is_level);
-            }
-            else if destination_shorthand == 3 {
+            } else if destination_shorthand == 3 {
                 // all but self
-            }
-            else {
+            } else {
                 dbg_assert!(false);
             }
-        },
+        }
 
         0x310 => {
             dbg_log!("APIC write icr1: {:08x}", value);
             apic.icr1 = value;
-        },
+        }
 
         0x320 => {
             if APIC_LOG_VERBOSE {
@@ -398,45 +394,49 @@ fn write32_internal(apic: &mut Apic, addr: u32, value: u32) {
             }
             // TODO: check if unmasking and if this should trigger an interrupt immediately
             apic.lvt_timer = value;
-        },
+        }
 
         0x330 => {
             dbg_log!("lvt thermal sensor: {:08x}", value);
             apic.lvt_thermal_sensor = value;
-        },
+        }
 
         0x340 => {
             dbg_log!("lvt perf counter: {:08x}", value);
             apic.lvt_perf_counter = value;
-        },
+        }
 
         0x350 => {
             dbg_log!("lvt int0: {:08x}", value);
             apic.lvt_int0 = value;
-        },
+        }
 
         0x360 => {
             dbg_log!("lvt int1: {:08x}", value);
             apic.lvt_int1 = value;
-        },
+        }
 
         0x370 => {
             dbg_log!("lvt error: {:08x}", value);
             apic.lvt_error = value;
-        },
+        }
 
         0x3E0 => {
             apic.timer_divider = value;
 
             let divide_shift = (value & 0b11) | ((value & 0b1000) >> 1);
-            apic.timer_divider_shift = if divide_shift == 0b111 { 0 } else { divide_shift + 1 };
+            apic.timer_divider_shift = if divide_shift == 0b111 {
+                0
+            } else {
+                divide_shift + 1
+            };
             dbg_log!(
                 "APIC timer divider: {:08x} shift={} tick={:.6}ms",
                 apic.timer_divider,
                 apic.timer_divider_shift,
                 (1 << apic.timer_divider_shift) as f64 / APIC_TIMER_FREQ
             );
-        },
+        }
 
         0x380 => {
             if APIC_LOG_VERBOSE {
@@ -449,22 +449,24 @@ fn write32_internal(apic: &mut Apic, addr: u32, value: u32) {
             apic.timer_initial_count = value;
             apic.timer_current_count = value;
             apic.timer_last_tick = unsafe { js::microtick() };
-        },
+        }
 
         0x390 => {
             dbg_log!("write timer current: {:08x}", value);
             dbg_assert!(false, "read-only register");
-        },
+        }
 
         _ => {
             dbg_log!("APIC write32 {:x} <- {:08x}", addr, value);
             dbg_assert!(false);
-        },
+        }
     }
 }
 
 #[no_mangle]
-pub fn apic_timer(now: f64) -> f64 { timer(&mut get_apic(), now) }
+pub fn apic_timer(now: f64) -> f64 {
+    timer(&mut get_apic(), now)
+}
 
 fn timer(apic: &mut Apic, now: f64) -> f64 {
     if apic.timer_initial_count == 0 || apic.timer_current_count == 0 {
@@ -503,19 +505,16 @@ fn timer(apic: &mut Apic, now: f64) -> f64 {
                     diff,
                 );
                 apic.timer_last_tick = now;
-            }
-            else {
+            } else {
                 apic.timer_last_tick += time_per_interrupt;
                 dbg_assert!(apic.timer_last_tick <= now);
             }
-        }
-        else if mode == APIC_TIMER_MODE_ONE_SHOT {
+        } else if mode == APIC_TIMER_MODE_ONE_SHOT {
             if APIC_LOG_VERBOSE {
                 dbg_log!("APIC timer one shot end");
             }
             apic.timer_current_count = 0;
-        }
-        else {
+        } else {
             dbg_assert!(false, "apic unimplemented timer mode: {:x}", mode);
         }
 
@@ -572,8 +571,7 @@ fn deliver(apic: &mut Apic, vector: u8, mode: u8, is_level: bool) {
 
     if is_level {
         register_set_bit(&mut apic.tmr, vector);
-    }
-    else {
+    } else {
         register_clear_bit(&mut apic.tmr, vector);
     }
 }
@@ -596,7 +594,9 @@ fn highest_isr(apic: &mut Apic) -> Option<u8> {
     highest
 }
 
-pub fn acknowledge_irq() -> Option<u8> { acknowledge_irq_internal(&mut get_apic()) }
+pub fn acknowledge_irq() -> Option<u8> {
+    acknowledge_irq_internal(&mut get_apic())
+}
 
 fn acknowledge_irq_internal(apic: &mut Apic) -> Option<u8> {
     let highest_irr = match highest_irr(apic) {
@@ -637,11 +637,17 @@ fn acknowledge_irq_internal(apic: &mut Apic) -> Option<u8> {
 }
 
 // functions operating on 256-bit registers (for irr, isr, tmr)
-fn register_get_bit(v: &[u32; 8], bit: u8) -> bool { v[(bit >> 5) as usize] & 1 << (bit & 31) != 0 }
+fn register_get_bit(v: &[u32; 8], bit: u8) -> bool {
+    v[(bit >> 5) as usize] & 1 << (bit & 31) != 0
+}
 
-fn register_set_bit(v: &mut [u32; 8], bit: u8) { v[(bit >> 5) as usize] |= 1 << (bit & 31); }
+fn register_set_bit(v: &mut [u32; 8], bit: u8) {
+    v[(bit >> 5) as usize] |= 1 << (bit & 31);
+}
 
-fn register_clear_bit(v: &mut [u32; 8], bit: u8) { v[(bit >> 5) as usize] &= !(1 << (bit & 31)); }
+fn register_clear_bit(v: &mut [u32; 8], bit: u8) {
+    v[(bit >> 5) as usize] &= !(1 << (bit & 31));
+}
 
 fn register_get_highest_bit(v: &[u32; 8]) -> Option<u8> {
     dbg_assert!(v.as_ptr().addr() & std::mem::align_of::<u64>() - 1 == 0);
@@ -655,4 +661,27 @@ fn register_get_highest_bit(v: &[u32; 8]) -> Option<u8> {
     }
 
     None
+}
+
+/// Restore the APIC state serialized by v86's `get_state_apic`.
+pub fn restore_state_bytes(bytes: &[u8]) -> Result<(), String> {
+    if bytes.len() != std::mem::size_of::<Apic>() {
+        return Err(format!(
+            "APIC state length {} != expected {}",
+            bytes.len(),
+            std::mem::size_of::<Apic>()
+        ));
+    }
+    if cfg!(target_endian = "big") {
+        return Err("native APIC restore requires a little-endian host".to_owned());
+    }
+    let mut apic = get_apic();
+    let target = unsafe {
+        std::slice::from_raw_parts_mut(
+            (&mut *apic as *mut Apic).cast::<u8>(),
+            std::mem::size_of::<Apic>(),
+        )
+    };
+    target.copy_from_slice(bytes);
+    Ok(())
 }

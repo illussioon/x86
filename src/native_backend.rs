@@ -2,6 +2,7 @@ use crate::error::{Result, X86Error};
 use crate::machine::{ExecutionBackend, MachineConfig};
 use crate::state::SavedState;
 use native_v86_core::native_runtime::NativeCpu;
+use std::path::{Path, PathBuf};
 
 /// Native x86 interpreter backend backed by the Rust port of v86's CPU core.
 ///
@@ -11,6 +12,7 @@ use native_v86_core::native_runtime::NativeCpu;
 pub struct NativeBackend {
     cpu: Option<NativeCpu>,
     instructions_per_step: u32,
+    ninep_root: Option<PathBuf>,
 }
 
 impl NativeBackend {
@@ -18,6 +20,7 @@ impl NativeBackend {
         Self {
             cpu: None,
             instructions_per_step: 10_000,
+            ninep_root: None,
         }
     }
 
@@ -32,6 +35,21 @@ impl NativeBackend {
 
     pub fn cpu_mut(&mut self) -> Option<&mut NativeCpu> {
         self.cpu.as_mut()
+    }
+
+    pub fn with_9p_root(mut self, path: impl AsRef<Path>) -> Self {
+        self.ninep_root = Some(path.as_ref().to_path_buf());
+        self
+    }
+
+    pub fn set_9p_root(&mut self, path: impl AsRef<Path>) -> Result<()> {
+        let path = path.as_ref();
+        if let Some(cpu) = self.cpu.as_mut() {
+            cpu.set_9p_root(path)
+                .map_err(X86Error::BackendUnavailable)?;
+        }
+        self.ninep_root = Some(path.to_path_buf());
+        Ok(())
     }
 }
 
@@ -55,7 +73,12 @@ impl ExecutionBackend for NativeBackend {
                 config.vga_memory_bytes
             ))
         })?;
-        self.cpu = Some(NativeCpu::new(ram, vga));
+        let mut cpu = NativeCpu::new(ram, vga);
+        if let Some(path) = &self.ninep_root {
+            cpu.set_9p_root(path)
+                .map_err(X86Error::BackendUnavailable)?;
+        }
+        self.cpu = Some(cpu);
         Ok(())
     }
 
@@ -88,7 +111,9 @@ impl ExecutionBackend for NativeBackend {
         if cpu.read_memory(address, buffer) {
             Ok(())
         } else {
-            Err(X86Error::InvalidImage("guest memory read is out of bounds".to_owned()))
+            Err(X86Error::InvalidImage(
+                "guest memory read is out of bounds".to_owned(),
+            ))
         }
     }
 
@@ -102,7 +127,9 @@ impl ExecutionBackend for NativeBackend {
         if cpu.write_memory(address, data) {
             Ok(())
         } else {
-            Err(X86Error::InvalidImage("guest memory write is out of bounds".to_owned()))
+            Err(X86Error::InvalidImage(
+                "guest memory write is out of bounds".to_owned(),
+            ))
         }
     }
 }

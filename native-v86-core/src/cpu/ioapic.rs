@@ -69,10 +69,14 @@ static IOAPIC: Mutex<Ioapic> = Mutex::new(Ioapic {
     irq_value: 0,
 });
 
-fn get_ioapic() -> MutexGuard<'static, Ioapic> { IOAPIC.try_lock().unwrap() }
+fn get_ioapic() -> MutexGuard<'static, Ioapic> {
+    IOAPIC.try_lock().unwrap()
+}
 
 #[no_mangle]
-pub fn get_ioapic_addr() -> u32 { &raw mut *get_ioapic() as u32 }
+pub fn get_ioapic_addr() -> u32 {
+    &raw mut *get_ioapic() as u32
+}
 
 pub fn remote_eoi(apic: &mut apic::Apic, vector: u8) {
     remote_eoi_internal(&mut get_ioapic(), apic, vector);
@@ -109,8 +113,7 @@ fn check_irq(ioapic: &mut Ioapic, apic: &mut apic::Apic, irq: u8) {
 
         if config & IOAPIC_CONFIG_TRIGGER_MODE_LEVEL == 0 {
             ioapic.irr &= !mask;
-        }
-        else {
+        } else {
             ioapic.ioredtbl_config[irq as usize] |= IOAPIC_CONFIG_REMOTE_IRR;
 
             if config & IOAPIC_CONFIG_REMOTE_IRR != 0 {
@@ -130,8 +133,7 @@ fn check_irq(ioapic: &mut Ioapic, apic: &mut apic::Apic, irq: u8) {
                 destination,
                 destination_mode,
             );
-        }
-        else {
+        } else {
             dbg_assert!(false, "TODO");
         }
 
@@ -139,7 +141,9 @@ fn check_irq(ioapic: &mut Ioapic, apic: &mut apic::Apic, irq: u8) {
     }
 }
 
-pub fn set_irq(i: u8) { set_irq_internal(&mut get_ioapic(), &mut apic::get_apic(), i) }
+pub fn set_irq(i: u8) {
+    set_irq_internal(&mut get_ioapic(), &mut apic::get_apic(), i)
+}
 
 fn set_irq_internal(ioapic: &mut Ioapic, apic: &mut apic::Apic, i: u8) {
     if i as usize >= IOAPIC_IRQ_COUNT {
@@ -170,7 +174,9 @@ fn set_irq_internal(ioapic: &mut Ioapic, apic: &mut apic::Apic, i: u8) {
     }
 }
 
-pub fn clear_irq(i: u8) { clear_irq_internal(&mut get_ioapic(), i) }
+pub fn clear_irq(i: u8) {
+    clear_irq_internal(&mut get_ioapic(), i)
+}
 
 fn clear_irq_internal(ioapic: &mut Ioapic, i: u8) {
     if i as usize >= IOAPIC_IRQ_COUNT {
@@ -204,15 +210,15 @@ fn read32_internal(ioapic: &mut Ioapic, addr: u32) -> u32 {
             0 => {
                 dbg_log!("IOAPIC Read id");
                 ioapic.ioapic_id << 24
-            },
+            }
             1 => {
                 dbg_log!("IOAPIC Read version");
                 0x11 | (IOAPIC_IRQ_COUNT as u32 - 1) << 16
-            },
+            }
             2 => {
                 dbg_log!("IOAPIC Read arbitration id");
                 ioapic.ioapic_id << 24
-            },
+            }
             IOAPIC_FIRST_IRQ_REG..IOAPIC_LAST_IRQ_REG => {
                 let irq = ((ioapic.ioregsel - IOAPIC_FIRST_IRQ_REG) >> 1) as u8;
                 let index = ioapic.ioregsel & 1;
@@ -221,22 +227,21 @@ fn read32_internal(ioapic: &mut Ioapic, addr: u32) -> u32 {
                     let value = ioapic.ioredtbl_destination[irq as usize];
                     dbg_log!("IOAPIC Read destination irq={:x} -> {:08x}", irq, value);
                     value
-                }
-                else {
+                } else {
                     let value = ioapic.ioredtbl_config[irq as usize];
                     dbg_log!("IOAPIC Read config irq={:x} -> {:08x}", irq, value);
                     value
                 }
-            },
+            }
             reg => {
                 dbg_assert!(false, "IOAPIC register read outside of range {:x}", reg);
                 0
-            },
+            }
         },
         _ => {
             dbg_assert!(false, "Unaligned or oob IOAPIC memory read: {:x}", addr);
             0
-        },
+        }
     }
 }
 
@@ -256,7 +261,7 @@ fn write32_internal(ioapic: &mut Ioapic, apic: &mut apic::Apic, addr: u32, value
             0 => ioapic.ioapic_id = (value >> 24) & 0x0F,
             1 | 2 => {
                 dbg_log!("IOAPIC Invalid write: {}", ioapic.ioregsel);
-            },
+            }
             IOAPIC_FIRST_IRQ_REG..IOAPIC_LAST_IRQ_REG => {
                 let irq = ((ioapic.ioregsel - IOAPIC_FIRST_IRQ_REG) >> 1) as u8;
                 let index = ioapic.ioregsel & 1;
@@ -269,8 +274,7 @@ fn write32_internal(ioapic: &mut Ioapic, apic: &mut apic::Apic, addr: u32, value
                         value >> 24
                     );
                     ioapic.ioredtbl_destination[irq as usize] = value & 0xFF000000;
-                }
-                else {
+                } else {
                     let old_value = ioapic.ioredtbl_config[irq as usize] as u32;
                     ioapic.ioredtbl_config[irq as usize] = (value & !IOAPIC_CONFIG_READONLY_MASK)
                         | (old_value & IOAPIC_CONFIG_READONLY_MASK);
@@ -294,7 +298,7 @@ fn write32_internal(ioapic: &mut Ioapic, apic: &mut apic::Apic, addr: u32, value
 
                     check_irq(ioapic, apic, irq);
                 }
-            },
+            }
             reg => {
                 dbg_assert!(
                     false,
@@ -302,7 +306,7 @@ fn write32_internal(ioapic: &mut Ioapic, apic: &mut apic::Apic, addr: u32, value
                     reg,
                     value
                 )
-            },
+            }
         },
         _ => {
             dbg_assert!(
@@ -311,6 +315,29 @@ fn write32_internal(ioapic: &mut Ioapic, apic: &mut apic::Apic, addr: u32, value
                 addr,
                 value
             )
-        },
+        }
     }
+}
+
+/// Restore the IOAPIC state serialized by v86's `get_state_ioapic`.
+pub fn restore_state_bytes(bytes: &[u8]) -> Result<(), String> {
+    if bytes.len() != std::mem::size_of::<Ioapic>() {
+        return Err(format!(
+            "IOAPIC state length {} != expected {}",
+            bytes.len(),
+            std::mem::size_of::<Ioapic>()
+        ));
+    }
+    if cfg!(target_endian = "big") {
+        return Err("native IOAPIC restore requires a little-endian host".to_owned());
+    }
+    let mut ioapic = get_ioapic();
+    let target = unsafe {
+        std::slice::from_raw_parts_mut(
+            (&mut *ioapic as *mut Ioapic).cast::<u8>(),
+            std::mem::size_of::<Ioapic>(),
+        )
+    };
+    target.copy_from_slice(bytes);
+    Ok(())
 }

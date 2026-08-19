@@ -1,9 +1,9 @@
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 
-use x86::{Bootloader, Image, ImageKind, Machine, MachineConfig, Resource, SavedState, X86Error};
 #[cfg(feature = "native-runtime")]
 use x86::NativeBackend;
+use x86::{Bootloader, Image, ImageKind, Machine, MachineConfig, Resource, SavedState, X86Error};
 
 fn print_help() {
     println!(
@@ -101,7 +101,13 @@ fn print_checksum(machine: &Machine, kind: &str) {
 fn main() -> Result<(), X86Error> {
     let mut machine = Machine::new(MachineConfig::default());
     #[cfg(feature = "native-runtime")]
-    machine.attach_backend(NativeBackend::new());
+    {
+        let backend = match std::env::var_os("X86_9P_ROOT") {
+            Some(root) => NativeBackend::new().with_9p_root(PathBuf::from(root)),
+            None => NativeBackend::new(),
+        };
+        machine.attach_backend(backend);
+    }
     println!("x86 native console v{}", x86::API_VERSION);
     println!("No browser or WebAssembly runtime is used. Type `help` for commands.");
     print!("x86> ");
@@ -226,9 +232,11 @@ fn main() -> Result<(), X86Error> {
                     let max_steps = if command == "run-state" {
                         parts
                             .next()
-                            .map(|value| value.parse::<u64>().map_err(|error| {
-                                X86Error::InvalidImage(format!("invalid max_steps: {error}"))
-                            }))
+                            .map(|value| {
+                                value.parse::<u64>().map_err(|error| {
+                                    X86Error::InvalidImage(format!("invalid max_steps: {error}"))
+                                })
+                            })
                             .transpose()?
                             .or(Some(100_000))
                     } else {
@@ -252,7 +260,7 @@ fn main() -> Result<(), X86Error> {
                         }
                     }
                 }
-            },
+            }
             "quit" | "exit" => break,
             _ => Err(X86Error::InvalidImage(
                 "unknown command; type `help`".to_owned(),

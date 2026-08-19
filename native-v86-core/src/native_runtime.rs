@@ -1,4 +1,5 @@
-use crate::cpu::{cpu, global_pointers, memory, pic};
+use crate::cpu::{apic, cpu, global_pointers, ioapic, memory, pic};
+use crate::native_devices;
 use std::collections::VecDeque;
 use std::io::Write;
 use std::sync::{Mutex, OnceLock};
@@ -50,20 +51,51 @@ fn uart_read(port: i32) -> i32 {
 
 fn restore_uart_state(state: &[serde_json::Value]) -> Result<(), String> {
     if state.len() < 11 {
-        return Err(format!("UART state has {} fields; expected 11", state.len()));
+        return Err(format!(
+            "UART state has {} fields; expected 11",
+            state.len()
+        ));
     }
-    let mut uart = uart0().lock().map_err(|_| "UART0 mutex poisoned".to_owned())?;
-    uart.ints = state[0].as_i64().ok_or_else(|| "UART ints is not an integer".to_owned())? as u8;
-    uart.baud_rate = state[1].as_i64().ok_or_else(|| "UART baud rate is not an integer".to_owned())? as u16;
-    uart.line_control = state[2].as_i64().ok_or_else(|| "UART line control is not an integer".to_owned())? as u8;
-    uart.lsr = state[3].as_i64().ok_or_else(|| "UART LSR is not an integer".to_owned())? as u8;
-    uart.fifo_control = state[4].as_i64().ok_or_else(|| "UART FIFO control is not an integer".to_owned())? as u8;
-    uart.ier = state[5].as_i64().ok_or_else(|| "UART IER is not an integer".to_owned())? as u8;
-    uart.iir = state[6].as_i64().ok_or_else(|| "UART IIR is not an integer".to_owned())? as u8;
-    uart.modem_control = state[7].as_i64().ok_or_else(|| "UART modem control is not an integer".to_owned())? as u8;
-    uart.modem_status = state[8].as_i64().ok_or_else(|| "UART modem status is not an integer".to_owned())? as u8;
-    uart.scratch = state[9].as_i64().ok_or_else(|| "UART scratch is not an integer".to_owned())? as u8;
-    uart.irq = state[10].as_i64().ok_or_else(|| "UART IRQ is not an integer".to_owned())? as u8;
+    let mut uart = uart0()
+        .lock()
+        .map_err(|_| "UART0 mutex poisoned".to_owned())?;
+    uart.ints = state[0]
+        .as_i64()
+        .ok_or_else(|| "UART ints is not an integer".to_owned())? as u8;
+    uart.baud_rate = state[1]
+        .as_i64()
+        .ok_or_else(|| "UART baud rate is not an integer".to_owned())? as u16;
+    uart.line_control = state[2]
+        .as_i64()
+        .ok_or_else(|| "UART line control is not an integer".to_owned())?
+        as u8;
+    uart.lsr = state[3]
+        .as_i64()
+        .ok_or_else(|| "UART LSR is not an integer".to_owned())? as u8;
+    uart.fifo_control = state[4]
+        .as_i64()
+        .ok_or_else(|| "UART FIFO control is not an integer".to_owned())?
+        as u8;
+    uart.ier = state[5]
+        .as_i64()
+        .ok_or_else(|| "UART IER is not an integer".to_owned())? as u8;
+    uart.iir = state[6]
+        .as_i64()
+        .ok_or_else(|| "UART IIR is not an integer".to_owned())? as u8;
+    uart.modem_control = state[7]
+        .as_i64()
+        .ok_or_else(|| "UART modem control is not an integer".to_owned())?
+        as u8;
+    uart.modem_status = state[8]
+        .as_i64()
+        .ok_or_else(|| "UART modem status is not an integer".to_owned())?
+        as u8;
+    uart.scratch = state[9]
+        .as_i64()
+        .ok_or_else(|| "UART scratch is not an integer".to_owned())? as u8;
+    uart.irq = state[10]
+        .as_i64()
+        .ok_or_else(|| "UART IRQ is not an integer".to_owned())? as u8;
     Ok(())
 }
 
@@ -100,7 +132,9 @@ fn uart_write(port: i32, value: i32) {
 /// Device-specific MMIO/port routing is intentionally represented as a small
 /// host surface first; concrete PC devices are added by the outer runtime.
 #[no_mangle]
-pub extern "C" fn cpu_exception_hook(_interrupt: i32) -> bool { false }
+pub extern "C" fn cpu_exception_hook(_interrupt: i32) -> bool {
+    false
+}
 
 #[no_mangle]
 pub extern "C" fn microtick() -> f64 {
@@ -108,7 +142,9 @@ pub extern "C" fn microtick() -> f64 {
 }
 
 #[no_mangle]
-pub extern "C" fn run_hardware_timers(_acpi_enabled: bool, _now: f64) -> f64 { 0.0 }
+pub extern "C" fn run_hardware_timers(_acpi_enabled: bool, _now: f64) -> f64 {
+    0.0
+}
 
 #[no_mangle]
 pub extern "C" fn cpu_event_halt() {}
@@ -117,35 +153,57 @@ pub extern "C" fn cpu_event_halt() {}
 pub extern "C" fn stop_idling() {}
 
 #[no_mangle]
-pub extern "C" fn get_rand_int() -> i32 { 0x1357_9BDF }
+pub extern "C" fn get_rand_int() -> i32 {
+    0x1357_9BDF
+}
 
 #[no_mangle]
 pub extern "C" fn io_port_read8(port: i32) -> i32 {
-    if (0x3F8..=0x3FF).contains(&port) { uart_read(port) } else { 0xFF }
+    if let Some(value) = native_devices::io_read8(port) {
+        value
+    } else if (0x3F8..=0x3FF).contains(&port) {
+        uart_read(port)
+    } else {
+        0xFF
+    }
 }
 
 #[no_mangle]
-pub extern "C" fn io_port_read16(_port: i32) -> i32 { 0xFFFF }
+pub extern "C" fn io_port_read16(port: i32) -> i32 {
+    native_devices::io_read32(port).unwrap_or(0xFFFF)
+}
 
 #[no_mangle]
-pub extern "C" fn io_port_read32(_port: i32) -> i32 { -1 }
+pub extern "C" fn io_port_read32(port: i32) -> i32 {
+    native_devices::io_read32(port).unwrap_or(-1)
+}
 
 #[no_mangle]
 pub extern "C" fn io_port_write8(port: i32, value: i32) {
-    if (0x3F8..=0x3FF).contains(&port) { uart_write(port, value); }
+    if !native_devices::io_write8(port, value) && (0x3F8..=0x3FF).contains(&port) {
+        uart_write(port, value);
+    }
 }
 
 #[no_mangle]
-pub extern "C" fn io_port_write16(_port: i32, _value: i32) {}
+pub extern "C" fn io_port_write16(port: i32, value: i32) {
+    if !native_devices::io_write16(port, value) {}
+}
 
 #[no_mangle]
-pub extern "C" fn io_port_write32(_port: i32, _value: i32) {}
+pub extern "C" fn io_port_write32(port: i32, value: i32) {
+    if !native_devices::io_write32(port, value) {}
+}
 
 #[no_mangle]
-pub extern "C" fn mmap_read8(_addr: u32) -> i32 { 0xFF }
+pub extern "C" fn mmap_read8(_addr: u32) -> i32 {
+    0xFF
+}
 
 #[no_mangle]
-pub extern "C" fn mmap_read32(_addr: u32) -> i32 { -1 }
+pub extern "C" fn mmap_read32(_addr: u32) -> i32 {
+    -1
+}
 
 #[no_mangle]
 pub extern "C" fn mmap_write8(_addr: u32, _value: i32) {}
@@ -197,19 +255,29 @@ impl NativeCpu {
         }
     }
 
-    pub fn ram_bytes(&self) -> u32 { self.ram_bytes }
+    pub fn ram_bytes(&self) -> u32 {
+        self.ram_bytes
+    }
 
-    pub fn vga_bytes(&self) -> u32 { self.vga_bytes }
+    pub fn vga_bytes(&self) -> u32 {
+        self.vga_bytes
+    }
 
     pub fn step(&mut self, max_instructions: u32) -> u32 {
         unsafe {
             let halted = *global_pointers::in_hlt;
-            let timer_due = self.last_timer_tick.elapsed() >= std::time::Duration::from_millis(55);
+            let timer_due = self.last_timer_tick.elapsed() >= std::time::Duration::from_millis(1);
             if halted || timer_due {
-                pic::set_irq(0);
-                cpu::handle_irqs();
-                pic::clear_irq(0);
-                cpu::handle_irqs();
+                let now = microtick();
+                if *global_pointers::acpi_enabled {
+                    let _ = apic::apic_timer(now);
+                    cpu::handle_irqs();
+                } else {
+                    pic::set_irq(0);
+                    cpu::handle_irqs();
+                    pic::clear_irq(0);
+                    cpu::handle_irqs();
+                }
                 self.last_timer_tick = Instant::now();
             }
             cpu::main_loop_native_interpreter(max_instructions)
@@ -252,9 +320,14 @@ impl NativeCpu {
         unsafe { *global_pointers::in_hlt }
     }
 
-    pub fn state_arena(&self) -> &[u8; 4096] { &self.state_arena }
-}
+    pub fn state_arena(&self) -> &[u8; 4096] {
+        &self.state_arena
+    }
 
+    pub fn set_9p_root(&mut self, path: impl AsRef<std::path::Path>) -> Result<(), String> {
+        native_devices::set_9p_root(path)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -294,7 +367,10 @@ impl NativeCpu {
 
         let segment_state = buffer_for(slots, buffers, 1)?;
         if segment_state.len() != 16 {
-            return Err(format!("state[1] length {} != expected 16", segment_state.len()));
+            return Err(format!(
+                "state[1] length {} != expected 16",
+                segment_state.len()
+            ));
         }
         unsafe {
             std::slice::from_raw_parts_mut(global_pointers::segment_is_null as *mut u8, 8)
@@ -355,7 +431,9 @@ impl NativeCpu {
         if tsc.len() >= 8 {
             let low = u32::from_le_bytes(tsc[0..4].try_into().unwrap());
             let high = u32::from_le_bytes(tsc[4..8].try_into().unwrap());
-            unsafe { cpu::set_tsc(low, high); }
+            unsafe {
+                cpu::set_tsc(low, high);
+            }
         }
 
         if let Some(uart_state) = slots.get(54).and_then(serde_json::Value::as_array) {
@@ -371,6 +449,19 @@ impl NativeCpu {
                 .ok_or_else(|| "PIC slave state is not an array".to_owned())?;
             let slave = byte_array_from_values(slave_array, 13, "PIC slave")?;
             pic::restore_state(&master, &slave);
+        }
+
+        if slots.get(46).is_some_and(|value| !value.is_null()) {
+            let apic_state = buffer_for(slots, buffers, 46)?;
+            apic::restore_state_bytes(apic_state)?;
+            unsafe {
+                *global_pointers::apic_enabled = true;
+                *global_pointers::acpi_enabled = true;
+            }
+        }
+        if slots.get(63).is_some_and(|value| !value.is_null()) {
+            let ioapic_state = buffer_for(slots, buffers, 63)?;
+            ioapic::restore_state_bytes(ioapic_state)?;
         }
 
         unsafe {
@@ -391,9 +482,18 @@ impl NativeCpu {
             *global_pointers::fpu_dp = scalar(slots, 73)? as i32;
             *global_pointers::fpu_dp_selector = scalar(slots, 74)? as i32;
             *global_pointers::fpu_opcode = scalar(slots, 75)? as i32;
-            *global_pointers::last_result = slots.get(86).and_then(serde_json::Value::as_i64).unwrap_or(0) as i32;
-            *global_pointers::fpu_status_word = slots.get(87).and_then(serde_json::Value::as_i64).unwrap_or(0) as u16;
-            *global_pointers::mxcsr = slots.get(88).and_then(serde_json::Value::as_i64).unwrap_or(0x1F80) as i32;
+            *global_pointers::last_result = slots
+                .get(86)
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(0) as i32;
+            *global_pointers::fpu_status_word = slots
+                .get(87)
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(0) as u16;
+            *global_pointers::mxcsr = slots
+                .get(88)
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(0x1F80) as i32;
         }
 
         let packed_memory = buffer_for(slots, buffers, 77)?;
@@ -404,7 +504,10 @@ impl NativeCpu {
         let page_count = self.ram_bytes as usize / 0x1000;
         let mut packed_page = 0usize;
         for page in 0..page_count {
-            if bitmap.get(page >> 3).map_or(false, |byte| byte & (1 << (page & 7)) != 0) {
+            if bitmap
+                .get(page >> 3)
+                .map_or(false, |byte| byte & (1 << (page & 7)) != 0)
+            {
                 let src_start = packed_page * 0x1000;
                 let src_end = src_start + 0x1000;
                 if src_end > packed_memory.len() {
@@ -428,8 +531,11 @@ impl NativeCpu {
             ));
         }
 
+        native_devices::restore_state(state, buffers)?;
         cpu::update_state_flags();
-        unsafe { cpu::full_clear_tlb(); }
+        unsafe {
+            cpu::full_clear_tlb();
+        }
         Ok(())
     }
 }
@@ -444,7 +550,8 @@ fn buffer_for<'a>(
         .and_then(serde_json::Value::as_object)
         .and_then(|object| object.get("buffer_id"))
         .and_then(serde_json::Value::as_u64)
-        .ok_or_else(|| format!("state[{index}] is not a typed buffer"))? as usize;
+        .ok_or_else(|| format!("state[{index}] is not a typed buffer"))?
+        as usize;
     buffers
         .get(buffer_id)
         .map(Vec::as_slice)
@@ -476,7 +583,8 @@ fn byte_array_from_values(
         }
         result[index] = value
             .as_i64()
-            .ok_or_else(|| format!("{name}[{index}] is not an integer"))? as u8;
+            .ok_or_else(|| format!("{name}[{index}] is not an integer"))?
+            as u8;
     }
     Ok(result)
 }
@@ -496,7 +604,11 @@ fn copy_buffer(
 ) -> Result<(), String> {
     let source = buffer_for(state, buffers, index)?;
     if source.len() != target.len() {
-        return Err(format!("state[{index}] length {} != expected {}", source.len(), target.len()));
+        return Err(format!(
+            "state[{index}] length {} != expected {}",
+            source.len(),
+            target.len()
+        ));
     }
     target.copy_from_slice(source);
     Ok(())

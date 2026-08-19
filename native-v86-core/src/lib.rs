@@ -5,6 +5,7 @@ mod dbg;
 mod paging;
 
 pub mod cpu;
+pub mod native_devices;
 pub mod native_runtime;
 
 pub mod js_api;
