@@ -1926,6 +1926,9 @@ INLINE struct uint128 softfloat_mul64ByShifted32To128( uint64_t a, uint32_t b )
 struct uint128 softfloat_mul64ByShifted32To128( uint64_t a, uint32_t b );
 #endif
 #endif
+#if defined(_MSC_VER) && defined(INLINE_LEVEL)
+#define softfloat_mul64ByShifted32To128 softfloat_mul64ByShifted32To128
+#endif
 
 #ifndef softfloat_mul64To128
 /*----------------------------------------------------------------------------
@@ -1956,6 +1959,9 @@ struct uint128 softfloat_mul128By32( uint64_t a64, uint64_t a0, uint32_t b )
 #else
 struct uint128 softfloat_mul128By32( uint64_t a64, uint64_t a0, uint32_t b );
 #endif
+#endif
+#if defined(_MSC_VER) && defined(INLINE_LEVEL)
+#define softfloat_mul128By32 softfloat_mul128By32
 #endif
 
 #ifndef softfloat_mul128To256M
