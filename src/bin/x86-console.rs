@@ -221,10 +221,19 @@ fn render_vga_graphics(machine: &Machine) -> bool {
         return false;
     }
 
-    // 80 columns x 40 rows; each Unicode half block represents two averaged
-    // source regions, which keeps a 1024x768 guest usable in a normal terminal.
-    let out_cols = 80usize;
-    let out_rows = 40usize;
+    // 128 columns x 48 rows; each Unicode half block represents two vertically
+    // stacked source regions, preserving the Arch framebuffer's terminal glyphs.
+    // Override with X86_TERM_COLS/X86_TERM_ROWS for a different terminal size.
+    let out_cols = std::env::var("X86_TERM_COLS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| (40..=240).contains(value))
+        .unwrap_or(128);
+    let out_rows = std::env::var("X86_TERM_ROWS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| (12..=120).contains(value))
+        .unwrap_or(48);
     print!("\x1b[2J\x1b[H");
     for row in 0..out_rows {
         let top_y0 = row * source_height / (out_rows * 2);
