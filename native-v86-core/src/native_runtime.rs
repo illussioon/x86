@@ -649,7 +649,11 @@ pub extern "C" fn io_port_write32(port: i32, value: i32) {
 #[no_mangle]
 pub extern "C" fn mmap_read8(addr: u32) -> i32 {
     if let Some(offset) = legacy_vga_offset(addr) {
-        return vga_text_memory().lock().ok().and_then(|m| m.get(offset).copied()).unwrap_or(0xFF) as i32;
+        return vga_text_memory()
+            .lock()
+            .ok()
+            .and_then(|m| m.get(offset).copied())
+            .unwrap_or(0xFF) as i32;
     }
     native_devices::mmio_read8(addr).unwrap_or(0xFF)
 }
@@ -658,8 +662,10 @@ pub extern "C" fn mmap_read8(addr: u32) -> i32 {
 pub extern "C" fn mmap_read32(addr: u32) -> i32 {
     if legacy_vga_offset(addr).is_some() && addr <= 0xBFFFC {
         return i32::from_le_bytes([
-            mmap_read8(addr) as u8, mmap_read8(addr + 1) as u8,
-            mmap_read8(addr + 2) as u8, mmap_read8(addr + 3) as u8,
+            mmap_read8(addr) as u8,
+            mmap_read8(addr + 1) as u8,
+            mmap_read8(addr + 2) as u8,
+            mmap_read8(addr + 3) as u8,
         ]);
     }
     native_devices::mmio_read32(addr).unwrap_or(-1)
@@ -669,7 +675,9 @@ pub extern "C" fn mmap_read32(addr: u32) -> i32 {
 pub extern "C" fn mmap_write8(addr: u32, value: i32) {
     if let Some(offset) = legacy_vga_offset(addr) {
         if let Ok(mut memory) = vga_text_memory().lock() {
-            if let Some(byte) = memory.get_mut(offset) { *byte = value as u8; }
+            if let Some(byte) = memory.get_mut(offset) {
+                *byte = value as u8;
+            }
         }
         return;
     }
@@ -689,7 +697,9 @@ pub extern "C" fn mmap_write16(addr: u32, value: i32) {
 #[no_mangle]
 pub extern "C" fn mmap_write32(addr: u32, value: i32) {
     if legacy_vga_offset(addr).is_some() {
-        for offset in 0..4 { mmap_write8(addr + offset, value >> (offset * 8)); }
+        for offset in 0..4 {
+            mmap_write8(addr + offset, value >> (offset * 8));
+        }
         return;
     }
     let _ = native_devices::mmio_write32(addr, value);
@@ -829,9 +839,13 @@ impl NativeCpu {
     /// The native runtime keeps the framebuffer in the same guest-visible
     /// backing store used by v86's LFB mapping.
     pub fn vga_text_snapshot(&self) -> Option<(u32, u32, Vec<u8>)> {
-        if self.graphical_mode { return None; }
+        if self.graphical_mode {
+            return None;
+        }
         let memory = vga_text_memory().lock().ok()?;
-        if memory.len() < 80 * 25 * 2 { return None; }
+        if memory.len() < 80 * 25 * 2 {
+            return None;
+        }
         Some((80, 25, memory[..80 * 25 * 2].to_vec()))
     }
 
@@ -1044,10 +1058,14 @@ impl NativeCpu {
             }
             if vga_state.get(6).is_some() {
                 let text = nested_buffer(vga_state, 6, buffers)?;
-                let mut target = vga_text_memory().lock().map_err(|_| "VGA text mutex poisoned".to_owned())?;
+                let mut target = vga_text_memory()
+                    .lock()
+                    .map_err(|_| "VGA text mutex poisoned".to_owned())?;
                 let copy_len = text.len().min(target.len());
                 target[..copy_len].copy_from_slice(&text[..copy_len]);
-                if copy_len < target.len() { target[copy_len..].fill(0); }
+                if copy_len < target.len() {
+                    target[copy_len..].fill(0);
+                }
             }
         }
 

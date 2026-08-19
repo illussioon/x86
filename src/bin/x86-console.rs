@@ -121,12 +121,23 @@ fn dump_screen(machine: &Machine, path: &str) -> Result<(), X86Error> {
     Ok(())
 }
 
-
 const ANSI_CGA: [(u8, u8, u8); 16] = [
-    (0, 0, 0), (0, 0, 170), (0, 170, 0), (0, 170, 170),
-    (170, 0, 0), (170, 0, 170), (170, 85, 0), (170, 170, 170),
-    (85, 85, 85), (85, 85, 255), (85, 255, 85), (85, 255, 255),
-    (255, 85, 85), (255, 85, 255), (255, 255, 85), (255, 255, 255),
+    (0, 0, 0),
+    (0, 0, 170),
+    (0, 170, 0),
+    (0, 170, 170),
+    (170, 0, 0),
+    (170, 0, 170),
+    (170, 85, 0),
+    (170, 170, 170),
+    (85, 85, 85),
+    (85, 85, 255),
+    (85, 255, 85),
+    (85, 255, 255),
+    (255, 85, 85),
+    (255, 85, 255),
+    (255, 255, 85),
+    (255, 255, 255),
 ];
 
 fn printable_guest_char(byte: u8) -> char {
@@ -138,9 +149,13 @@ fn printable_guest_char(byte: u8) -> char {
 }
 
 fn render_vga_text(machine: &Machine) -> bool {
-    let Some((cols, rows, bytes)) = machine.vga_text_snapshot() else { return false; };
+    let Some((cols, rows, bytes)) = machine.vga_text_snapshot() else {
+        return false;
+    };
     let cells = cols as usize * rows as usize;
-    if bytes.len() < cells * 2 { return false; }
+    if bytes.len() < cells * 2 {
+        return false;
+    }
 
     print!("\x1b[2J\x1b[H");
     for row in 0..rows as usize {
@@ -150,7 +165,10 @@ fn render_vga_text(machine: &Machine) -> bool {
             let attr = bytes[index + 1];
             let fg = ANSI_CGA[(attr & 0x0F) as usize];
             let bg = ANSI_CGA[((attr >> 4) & 0x07) as usize];
-            print!("\x1b[38;2;{};{};{}m\x1b[48;2;{};{};{}m{}", fg.0, fg.1, fg.2, bg.0, bg.1, bg.2, ch);
+            print!(
+                "\x1b[38;2;{};{};{}m\x1b[48;2;{};{};{}m{}",
+                fg.0, fg.1, fg.2, bg.0, bg.1, bg.2, ch
+            );
         }
         print!("\x1b[0m\r\n");
     }
@@ -159,7 +177,15 @@ fn render_vga_text(machine: &Machine) -> bool {
     true
 }
 
-fn average_rgb(pixels: &[u8], width: usize, height: usize, x0: usize, x1: usize, y0: usize, y1: usize) -> (u8, u8, u8) {
+fn average_rgb(
+    pixels: &[u8],
+    width: usize,
+    height: usize,
+    x0: usize,
+    x1: usize,
+    y0: usize,
+    y1: usize,
+) -> (u8, u8, u8) {
     let mut sums = [0u64; 3];
     let mut count = 0u64;
     let x_end = x1.max(x0 + 1).min(width);
@@ -175,15 +201,25 @@ fn average_rgb(pixels: &[u8], width: usize, height: usize, x0: usize, x1: usize,
             }
         }
     }
-    if count == 0 { return (0, 0, 0); }
-    ((sums[0] / count) as u8, (sums[1] / count) as u8, (sums[2] / count) as u8)
+    if count == 0 {
+        return (0, 0, 0);
+    }
+    (
+        (sums[0] / count) as u8,
+        (sums[1] / count) as u8,
+        (sums[2] / count) as u8,
+    )
 }
 
 fn render_vga_graphics(machine: &Machine) -> bool {
-    let Some((width, height, pixels)) = machine.vga_framebuffer_rgb() else { return false; };
+    let Some((width, height, pixels)) = machine.vga_framebuffer_rgb() else {
+        return false;
+    };
     let source_width = width as usize;
     let source_height = height as usize;
-    if source_width == 0 || source_height == 0 || pixels.len() != source_width * source_height * 3 { return false; }
+    if source_width == 0 || source_height == 0 || pixels.len() != source_width * source_height * 3 {
+        return false;
+    }
 
     // 80 columns x 40 rows; each Unicode half block represents two averaged
     // source regions, which keeps a 1024x768 guest usable in a normal terminal.
@@ -199,8 +235,19 @@ fn render_vga_graphics(machine: &Machine) -> bool {
             let x0 = col * source_width / out_cols;
             let x1 = (col + 1) * source_width / out_cols;
             let top = average_rgb(&pixels, source_width, source_height, x0, x1, top_y0, top_y1);
-            let bottom = average_rgb(&pixels, source_width, source_height, x0, x1, bottom_y0, bottom_y1);
-            print!("\x1b[38;2;{};{};{}m\x1b[48;2;{};{};{}m▀", top.0, top.1, top.2, bottom.0, bottom.1, bottom.2);
+            let bottom = average_rgb(
+                &pixels,
+                source_width,
+                source_height,
+                x0,
+                x1,
+                bottom_y0,
+                bottom_y1,
+            );
+            print!(
+                "\x1b[38;2;{};{};{}m\x1b[48;2;{};{};{}m▀",
+                top.0, top.1, top.2, bottom.0, bottom.1, bottom.2
+            );
         }
         print!("\x1b[0m\r\n");
     }
