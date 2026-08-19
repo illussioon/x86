@@ -137,6 +137,10 @@ impl ExecutionBackend for NativeBackend {
         self.cpu.as_ref()?.vga_framebuffer_rgb()
     }
 
+    fn vga_text_snapshot(&self) -> Option<(u32, u32, Vec<u8>)> {
+        self.cpu.as_ref()?.vga_text_snapshot()
+    }
+
     fn inject_text(&mut self, text: &str) -> Result<usize> {
         if self.cpu.is_none() {
             return Err(X86Error::BackendUnavailable(

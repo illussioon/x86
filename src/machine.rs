@@ -126,6 +126,11 @@ pub trait ExecutionBackend: Send {
         None
     }
 
+    /// Return the legacy VGA text plane as `(columns, rows, char/attribute bytes)`.
+    fn vga_text_snapshot(&self) -> Option<(u32, u32, Vec<u8>)> {
+        None
+    }
+
     /// Queue host text as guest keyboard input when supported by the backend.
     fn inject_text(&mut self, _text: &str) -> Result<usize> {
         Err(X86Error::BackendUnavailable(
@@ -333,6 +338,10 @@ impl Machine {
 
     pub fn vga_framebuffer_rgb(&self) -> Option<(u32, u32, Vec<u8>)> {
         self.backend.as_ref()?.vga_framebuffer_rgb()
+    }
+
+    pub fn vga_text_snapshot(&self) -> Option<(u32, u32, Vec<u8>)> {
+        self.backend.as_ref()?.vga_text_snapshot()
     }
 
     pub fn inject_text(&mut self, text: &str) -> Result<usize> {

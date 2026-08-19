@@ -302,7 +302,7 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "native-v86-core"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "cc",
  "serde_json",
@@ -752,7 +752,7 @@ checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 
 [[package]]
 name = "x86-native"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "hex",
  "native-v86-core",
