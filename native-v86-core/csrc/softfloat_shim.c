@@ -11,20 +11,6 @@ static uint_fast8_t softfloat_clz64_impl(uint64_t value)
     }
     return count;
 }
-uint_fast8_t softfloat_countLeadingZeros16(uint16_t value)
-{
-    uint_fast8_t count = 0;
-    if (value == 0) return 16;
-    while ((value & UINT16_C(0x8000)) == 0) { value <<= 1; ++count; }
-    return count;
-}
-uint_fast8_t softfloat_countLeadingZeros32(uint32_t value)
-{
-    uint_fast8_t count = 0;
-    if (value == 0) return 32;
-    while ((value & UINT32_C(0x80000000)) == 0) { value <<= 1; ++count; }
-    return count;
-}
 uint_fast8_t softfloat_countLeadingZeros64(uint64_t value)
 {
     return softfloat_clz64_impl(value);
