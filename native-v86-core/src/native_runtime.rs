@@ -170,7 +170,7 @@ pub extern "C" fn io_port_read8(port: i32) -> i32 {
 
 #[no_mangle]
 pub extern "C" fn io_port_read16(port: i32) -> i32 {
-    native_devices::io_read32(port).unwrap_or(0xFFFF)
+    native_devices::io_read16(port).unwrap_or(0xFFFF)
 }
 
 #[no_mangle]

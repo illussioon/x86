@@ -128,6 +128,13 @@ pub fn restore_state(state: &serde_json::Value, buffers: &[Vec<u8>]) -> Result<(
 
 pub fn io_read8(port: i32) -> Option<i32> {
     let b = bus().lock().ok()?;
+    if (PCI_CONFIG_ADDRESS..PCI_CONFIG_ADDRESS + 4).contains(&port) {
+        return Some(((b.pci_address >> (8 * (port - PCI_CONFIG_ADDRESS))) & 0xFF) as i32);
+    }
+    if (PCI_CONFIG_DATA..PCI_CONFIG_DATA + 4).contains(&port) {
+        let value = pci_config_read(b.pci_address);
+        return Some(((value >> (8 * (port - PCI_CONFIG_DATA))) & 0xFF) as i32);
+    }
     if (VIRTIO_9P_ISR..VIRTIO_9P_ISR + 4).contains(&port) {
         return Some(b.ninep.isr as i32);
     }
@@ -160,6 +167,19 @@ pub fn mmio_write16(addr: u32, value: i32) -> bool {
 
 pub fn mmio_write32(addr: u32, value: i32) -> bool {
     io_write32(addr as i32, value)
+}
+
+pub fn io_read16(port: i32) -> Option<i32> {
+    let b = bus().lock().ok()?;
+    if (PCI_CONFIG_ADDRESS..PCI_CONFIG_ADDRESS + 3).contains(&port) {
+        return Some(((b.pci_address >> (8 * (port - PCI_CONFIG_ADDRESS))) & 0xFFFF) as i32);
+    }
+    if (PCI_CONFIG_DATA..PCI_CONFIG_DATA + 3).contains(&port) {
+        let value = pci_config_read(b.pci_address);
+        return Some(((value >> (8 * (port - PCI_CONFIG_DATA))) & 0xFFFF) as i32);
+    }
+    drop(b);
+    io_read32(port)
 }
 
 pub fn io_read32(port: i32) -> Option<i32> {
@@ -505,6 +525,8 @@ mod pci_tests {
         assert!(io_write32(PCI_CONFIG_ADDRESS, 0x8000_0000u32 as i32).to_owned());
         let id = io_read32(PCI_CONFIG_DATA).expect("PCI data port");
         assert_eq!(id as u32, 0x1009_1AF4);
+        assert_eq!(io_read16(PCI_CONFIG_DATA).unwrap() as u16, 0x1AF4);
+        assert_eq!(io_read8(PCI_CONFIG_DATA).unwrap() as u8, 0xF4);
 
         assert!(io_write32(PCI_CONFIG_ADDRESS, 0x8000_0010u32 as i32).to_owned());
         let bar = io_read32(PCI_CONFIG_DATA).expect("PCI BAR");
