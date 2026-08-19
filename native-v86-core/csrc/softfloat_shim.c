@@ -1,5 +1,36 @@
 #include <stdint.h>
 
+#if defined(_MSC_VER)
+static uint_fast8_t softfloat_clz64_impl(uint64_t value)
+{
+    uint_fast8_t count = 0;
+    if (value == 0) return 64;
+    while ((value & UINT64_C(0x8000000000000000)) == 0) {
+        value <<= 1;
+        ++count;
+    }
+    return count;
+}
+uint_fast8_t softfloat_countLeadingZeros16(uint16_t value)
+{
+    uint_fast8_t count = 0;
+    if (value == 0) return 16;
+    while ((value & UINT16_C(0x8000)) == 0) { value <<= 1; ++count; }
+    return count;
+}
+uint_fast8_t softfloat_countLeadingZeros32(uint32_t value)
+{
+    uint_fast8_t count = 0;
+    if (value == 0) return 32;
+    while ((value & UINT32_C(0x80000000)) == 0) { value <<= 1; ++count; }
+    return count;
+}
+uint_fast8_t softfloat_countLeadingZeros64(uint64_t value)
+{
+    return softfloat_clz64_impl(value);
+}
+#endif
+
 struct uint128 { uint64_t v0, v64; };
 struct uint128_extra { uint64_t extra; struct uint128 v; };
 
