@@ -9,6 +9,8 @@ const VIRTIO_9P_COMMON: i32 = 0xA800;
 const VIRTIO_9P_NOTIFY: i32 = 0xA900;
 const VIRTIO_9P_ISR: i32 = 0xA700;
 const VIRTIO_9P_CONFIG: i32 = 0xA600;
+const PCI_CONFIG_ADDRESS: i32 = 0xCF8;
+const PCI_CONFIG_DATA: i32 = 0xCFC;
 
 #[derive(Clone, Default)]
 struct Queue {
@@ -55,11 +57,17 @@ impl Default for Virtio9p {
 #[derive(Default)]
 struct DeviceBus {
     ninep: Virtio9p,
+    pci_address: u32,
 }
 static BUS: OnceLock<Mutex<DeviceBus>> = OnceLock::new();
 
 fn bus() -> &'static Mutex<DeviceBus> {
-    BUS.get_or_init(|| Mutex::new(DeviceBus::default()))
+    BUS.get_or_init(|| {
+        Mutex::new(DeviceBus {
+            ninep: Virtio9p::default(),
+            pci_address: 0,
+        })
+    })
 }
 
 pub fn set_9p_root(path: impl AsRef<Path>) -> Result<(), String> {
@@ -136,6 +144,9 @@ pub fn io_read8(port: i32) -> Option<i32> {
 
 pub fn io_read32(port: i32) -> Option<i32> {
     let b = bus().lock().ok()?;
+    if port == PCI_CONFIG_DATA {
+        return Some(pci_config_read(b.pci_address) as i32);
+    }
     if (VIRTIO_9P_COMMON..VIRTIO_9P_COMMON + 0x100).contains(&port) {
         let off = port - VIRTIO_9P_COMMON;
         return Some(match off {
@@ -177,8 +188,27 @@ pub fn io_write16(port: i32, _value: i32) -> bool {
     false
 }
 
-pub fn io_write32(port: i32, _value: i32) -> bool {
+pub fn io_write32(port: i32, value: i32) -> bool {
+    if let Ok(mut b) = bus().lock() {
+        if port == PCI_CONFIG_ADDRESS {
+            b.pci_address = value as u32;
+            return true;
+        }
+    }
     io_write16(port, 0)
+}
+
+fn pci_config_read(address: u32) -> u32 {
+    if address & 0x8000_0000 == 0 || (address >> 11) & 0x1F != 0 {
+        return 0xFFFF_FFFF;
+    }
+    match (address >> 2) & 0x3F {
+        0 => 0x1009_1AF4,
+        2 => 0x0180_0000,
+        4 => 0x0000_A001,
+        8 => 0xFF00_0000,
+        _ => 0,
+    }
 }
 
 fn read8(addr: u32) -> u8 {
