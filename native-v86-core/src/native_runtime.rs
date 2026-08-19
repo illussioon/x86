@@ -8,6 +8,139 @@ use std::time::Instant;
 static START: OnceLock<Instant> = OnceLock::new();
 static UART0: OnceLock<Mutex<UartState>> = OnceLock::new();
 static PS2: OnceLock<Mutex<Ps2State>> = OnceLock::new();
+static PIT: OnceLock<Mutex<PitState>> = OnceLock::new();
+
+#[derive(Clone)]
+struct PitState {
+    next_low: [u8; 3],
+    enabled: [bool; 3],
+    mode: [u8; 3],
+    read_mode: [u8; 3],
+    latch: [u8; 3],
+    latch_value: [u16; 3],
+    reload: [u16; 3],
+    start_value: [u16; 3],
+    start: [Instant; 3],
+}
+
+impl Default for PitState {
+    fn default() -> Self {
+        Self {
+            next_low: [1; 3],
+            enabled: [false; 3],
+            mode: [3; 3],
+            read_mode: [3; 3],
+            latch: [0; 3],
+            latch_value: [0; 3],
+            reload: [0; 3],
+            start_value: [0; 3],
+            start: [Instant::now(), Instant::now(), Instant::now()],
+        }
+    }
+}
+
+fn pit() -> &'static Mutex<PitState> {
+    PIT.get_or_init(|| Mutex::new(PitState::default()))
+}
+
+const PIT_HZ: f64 = 1_193_181.6666;
+
+fn pit_counter_value(state: &PitState, channel: usize) -> u16 {
+    if !state.enabled[channel] || state.reload[channel] == 0 {
+        return 0;
+    }
+    let elapsed = state.start[channel].elapsed().as_secs_f64();
+    let ticks = (elapsed * PIT_HZ) as u64;
+    let reload = state.reload[channel] as u64;
+    (state.start_value[channel] as u64).wrapping_sub(ticks % reload.max(1)) as u16
+}
+
+fn pit_read(port: i32) -> Option<i32> {
+    if !(0x40..=0x42).contains(&port) {
+        return None;
+    }
+    let channel = (port - 0x40) as usize;
+    let mut state = pit().lock().ok()?;
+    if state.latch[channel] != 0 {
+        state.latch[channel] -= 1;
+        return Some(if state.latch[channel] == 1 {
+            (state.latch_value[channel] & 0xFF) as i32
+        } else {
+            (state.latch_value[channel] >> 8) as i32
+        });
+    }
+    let value = pit_counter_value(&state, channel);
+    let low = state.next_low[channel] != 0;
+    if state.mode[channel] == 3 {
+        state.next_low[channel] ^= 1;
+    }
+    Some(if low {
+        (value & 0xFF) as i32
+    } else {
+        (value >> 8) as i32
+    })
+}
+
+fn pit_poll() -> bool {
+    let Ok(mut state) = pit().lock() else {
+        return false;
+    };
+    if !state.enabled[0] || state.reload[0] == 0 {
+        return false;
+    }
+    let elapsed_ticks = (state.start[0].elapsed().as_secs_f64() * PIT_HZ) as u64;
+    if elapsed_ticks >= state.start_value[0] as u64 {
+        state.start[0] = Instant::now();
+        state.start_value[0] = state.reload[0];
+        drop(state);
+        unsafe {
+            crate::cpu::cpu::device_lower_irq(0);
+            crate::cpu::cpu::device_raise_irq(0);
+        }
+    }
+    true
+}
+
+fn pit_write(port: i32, value: i32) -> bool {
+    let Ok(mut state) = pit().lock() else {
+        return false;
+    };
+    if (0x40..=0x42).contains(&port) {
+        let channel = (port - 0x40) as usize;
+        let byte = value as u8;
+        if state.next_low[channel] != 0 {
+            state.reload[channel] = (state.reload[channel] & 0xFF00) | byte as u16;
+        } else {
+            state.reload[channel] = (state.reload[channel] & 0x00FF) | ((byte as u16) << 8);
+            if state.reload[channel] == 0 {
+                state.reload[channel] = 0xFFFF;
+            }
+            state.start_value[channel] = state.reload[channel];
+            state.start[channel] = Instant::now();
+            state.enabled[channel] = true;
+        }
+        state.next_low[channel] ^= 1;
+        return true;
+    }
+    if port == 0x43 {
+        let command = value as u8;
+        let channel = ((command >> 6) & 3) as usize;
+        if channel >= 3 {
+            return true;
+        }
+        let read_mode = (command >> 4) & 3;
+        if read_mode == 0 {
+            state.latch_value[channel] = pit_counter_value(&state, channel);
+            state.latch[channel] = 2;
+        } else {
+            state.read_mode[channel] = read_mode;
+            state.mode[channel] = (command >> 1) & 7;
+            state.next_low[channel] = if read_mode == 3 { 1 } else { 0 };
+        }
+        return true;
+    }
+    port == 0x61
+}
 
 #[derive(Default)]
 struct Ps2State {
@@ -244,6 +377,56 @@ fn restore_uart_state(state: &[serde_json::Value]) -> Result<(), String> {
     Ok(())
 }
 
+fn nested_buffer<'a>(
+    state: &[serde_json::Value],
+    index: usize,
+    buffers: &'a [Vec<u8>],
+) -> Result<&'a [u8], String> {
+    let buffer_id = state
+        .get(index)
+        .and_then(serde_json::Value::as_object)
+        .and_then(|object| object.get("buffer_id"))
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| format!("nested state[{index}] is not a typed buffer"))?
+        as usize;
+    buffers
+        .get(buffer_id)
+        .map(Vec::as_slice)
+        .ok_or_else(|| format!("nested buffer id {buffer_id} is out of range"))
+}
+
+fn restore_pit_state(state: &[serde_json::Value], buffers: &[Vec<u8>]) -> Result<(), String> {
+    if state.len() < 9 {
+        return Err(format!("PIT state has {} fields; expected 9", state.len()));
+    }
+    let next_low = nested_buffer(state, 0, buffers)?;
+    let enabled = nested_buffer(state, 1, buffers)?;
+    let mode = nested_buffer(state, 2, buffers)?;
+    let read_mode = nested_buffer(state, 3, buffers)?;
+    let latch = nested_buffer(state, 4, buffers)?;
+    let reload = nested_buffer(state, 6, buffers)?;
+    let start_value = nested_buffer(state, 8, buffers)?;
+    let mut pit = pit().lock().map_err(|_| "PIT mutex poisoned".to_owned())?;
+    for channel in 0..3 {
+        pit.next_low[channel] = *next_low.get(channel).unwrap_or(&1);
+        pit.enabled[channel] = *enabled.get(channel).unwrap_or(&0) != 0;
+        pit.mode[channel] = *mode.get(channel).unwrap_or(&3);
+        pit.read_mode[channel] = *read_mode.get(channel).unwrap_or(&3);
+        pit.latch[channel] = *latch.get(channel).unwrap_or(&0);
+        let offset = channel * 2;
+        pit.reload[channel] = u16::from_le_bytes([
+            *reload.get(offset).unwrap_or(&0),
+            *reload.get(offset + 1).unwrap_or(&0),
+        ]);
+        pit.start_value[channel] = u16::from_le_bytes([
+            *start_value.get(offset).unwrap_or(&0),
+            *start_value.get(offset + 1).unwrap_or(&0),
+        ]);
+        pit.start[channel] = Instant::now();
+    }
+    Ok(())
+}
+
 fn uart_write(port: i32, value: i32) {
     let offset = (port - 0x3F8) as u8;
     let byte = value as u8;
@@ -288,6 +471,7 @@ pub extern "C" fn microtick() -> f64 {
 
 #[no_mangle]
 pub extern "C" fn run_hardware_timers(_acpi_enabled: bool, _now: f64) -> f64 {
+    let _ = pit_poll();
     0.0
 }
 
@@ -304,7 +488,9 @@ pub extern "C" fn get_rand_int() -> i32 {
 
 #[no_mangle]
 pub extern "C" fn io_port_read8(port: i32) -> i32 {
-    if let Some(value) = ps2_read(port) {
+    if let Some(value) = pit_read(port) {
+        value
+    } else if let Some(value) = ps2_read(port) {
         value
     } else if let Some(value) = native_devices::io_read8(port) {
         value
@@ -327,7 +513,8 @@ pub extern "C" fn io_port_read32(port: i32) -> i32 {
 
 #[no_mangle]
 pub extern "C" fn io_port_write8(port: i32, value: i32) {
-    if !ps2_write(port, value)
+    if !pit_write(port, value)
+        && !ps2_write(port, value)
         && !native_devices::io_write8(port, value)
         && (0x3F8..=0x3FF).contains(&port)
     {
@@ -433,10 +620,11 @@ impl NativeCpu {
             let timer_due = self.last_timer_tick.elapsed() >= std::time::Duration::from_millis(1);
             if halted || timer_due {
                 let now = microtick();
+                let pit_active = pit_poll();
                 if *global_pointers::acpi_enabled {
                     let _ = apic::apic_timer(now);
                     cpu::handle_irqs();
-                } else {
+                } else if !pit_active {
                     pic::set_irq(0);
                     cpu::handle_irqs();
                     pic::clear_irq(0);
@@ -628,6 +816,9 @@ impl NativeCpu {
 
         if let Some(uart_state) = slots.get(54).and_then(serde_json::Value::as_array) {
             restore_uart_state(uart_state)?;
+        }
+        if let Some(pit_state) = slots.get(58).and_then(serde_json::Value::as_array) {
+            restore_pit_state(pit_state, buffers)?;
         }
         if let Some(pic_state) = slots.get(60).and_then(serde_json::Value::as_array) {
             let master = byte_array_from_state(pic_state, 13, "PIC master")?;
