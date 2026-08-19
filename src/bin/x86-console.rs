@@ -7,7 +7,7 @@ use x86::{Bootloader, Image, ImageKind, Machine, MachineConfig, Resource, SavedS
 
 fn print_help() {
     println!(
-        "Commands:\n  help                         Show this help\n  capabilities                Show native capabilities\n  info                        Show machine configuration and attached images\n  config ram <bytes>          Set guest RAM size\n  config vga <bytes>          Set VGA memory size\n  load bios <path>             Load BIOS image\n  load vga-bios <path>         Load VGA BIOS image\n  load disk <path>             Load raw disk image\n  load cdrom <path>            Load ISO/CD-ROM image\n  load state <path>            Load v86 saved state (.bin or .bin.zst)\n  load bootloader <path|url>   Load a bootloader from disk or HTTP(S)\n  checksum <kind>              Print SHA-256 for bios/vga-bios/disk/cdrom/bootloader/state\n  prepare                     Validate backend readiness\n  run                         Run the attached native backend\n  run-state [max_steps]       Restore and run the loaded v86 saved state\n  quit                        Exit"
+        "Commands:\n  help                         Show this help\n  capabilities                Show native capabilities\n  info                        Show machine configuration and attached images\n  config ram <bytes>          Set guest RAM size\n  config vga <bytes>          Set VGA memory size\n  load bios <path>             Load BIOS image\n  load vga-bios <path>         Load VGA BIOS image\n  load disk <path>             Load raw disk image\n  load cdrom <path>            Load ISO/CD-ROM image\n  load state <path>            Load v86 saved state (.bin or .bin.zst)\n  load bootloader <path|url>   Load a bootloader from disk or HTTP(S)\n  checksum <kind>              Print SHA-256 for bios/vga-bios/disk/cdrom/bootloader/state\n  prepare                     Validate backend readiness\n  run                         Run the attached native backend\n  run-state [max_steps]       Restore and run the loaded v86 saved state\n  dump-screen <path.ppm>      Save the current guest VGA framebuffer as PPM\n  type <text>                 Send text and Enter to the guest keyboard\n  quit                        Exit"
     );
 }
 
@@ -96,6 +96,29 @@ fn print_checksum(machine: &Machine, kind: &str) {
         Some(value) => println!("{kind}: {value}"),
         None => println!("{kind}: not loaded or unknown kind"),
     }
+}
+
+fn dump_screen(machine: &Machine, path: &str) -> Result<(), X86Error> {
+    let (width, height, pixels) = machine.vga_framebuffer_rgb().ok_or_else(|| {
+        X86Error::BackendUnavailable(
+            "guest is not currently exposing a 32-bit graphical VGA framebuffer".to_owned(),
+        )
+    })?;
+    let expected = width as usize * height as usize * 3;
+    if pixels.len() != expected {
+        return Err(X86Error::InvalidImage(
+            "invalid framebuffer length".to_owned(),
+        ));
+    }
+    let mut output = Vec::with_capacity(expected + 32);
+    output.extend_from_slice(format!("P6\n{} {}\n255\n", width, height).as_bytes());
+    output.extend_from_slice(&pixels);
+    std::fs::write(path, output).map_err(|source| X86Error::Io {
+        path: PathBuf::from(path),
+        source,
+    })?;
+    println!("screen saved: {} ({}x{})", path, width, height);
+    Ok(())
 }
 
 fn main() -> Result<(), X86Error> {
@@ -211,6 +234,18 @@ fn main() -> Result<(), X86Error> {
             },
             "checksum" => {
                 print_checksum(&machine, parts.next().unwrap_or_default());
+                Ok(())
+            }
+            "dump-screen" => {
+                let path = parts.next().ok_or_else(|| {
+                    X86Error::InvalidImage("usage: dump-screen <path.ppm>".to_owned())
+                })?;
+                dump_screen(&machine, path)
+            }
+            "type" => {
+                let text = parts.collect::<Vec<_>>().join(" ");
+                let count = machine.inject_text(&format!("{text}\n"))?;
+                println!("keyboard input queued: {count} characters");
                 Ok(())
             }
             "prepare" => match machine.prepare() {

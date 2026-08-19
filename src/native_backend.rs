@@ -132,4 +132,17 @@ impl ExecutionBackend for NativeBackend {
             ))
         }
     }
+
+    fn vga_framebuffer_rgb(&self) -> Option<(u32, u32, Vec<u8>)> {
+        self.cpu.as_ref()?.vga_framebuffer_rgb()
+    }
+
+    fn inject_text(&mut self, text: &str) -> Result<usize> {
+        if self.cpu.is_none() {
+            return Err(X86Error::BackendUnavailable(
+                "native backend is not prepared".to_owned(),
+            ));
+        }
+        Ok(native_v86_core::native_runtime::inject_keyboard_text(text))
+    }
 }

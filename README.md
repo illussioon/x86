@@ -8,7 +8,7 @@
 
 **x86-native** is a cross-platform native Rust library for building x86 machine hosts without a browser, DOM, WebAssembly runtime or web frontend. The package name on crates.io is `x86-native`; the Rust library target remains `x86`, so applications use `use x86::...`.
 
-> **Project status:** the native resource and machine-host API is implemented and tested. `ExecutionBackend` is the stable boundary for the future CPU, memory, interrupt and device implementation. The current release does not pretend that a metadata/state loader is already a complete PC emulator.
+> **Project status:** the native interpreter, saved-state restore, VirtIO-9P transport, host-directory filesystem, VGA framebuffer extraction and PS/2 text input are implemented and tested. The Arch saved state reaches the restored `root@localhost:~#` shell; `dump-screen` captures the guest framebuffer and `type` sends keyboard text. The project is still an incremental native device port, not a claim that every optional upstream v86 peripheral is already implemented.
 
 ## Languages
 
@@ -109,13 +109,16 @@ x86> load disk disk.img
 x86> load state arch_state-v3.bin.zst
 x86> load bootloader https://example.org/bootloader.bin
 x86> info
-x86> checksum state
-x86> prepare
-x86> run
+x86> load state ./image/arch_state-v3.bin.zst
+x86> run-state 1000000
+x86> dump-screen ./arch-screen.ppm
+x86> type echo native-ok
+x86> run-state 1000000
+x86> dump-screen ./arch-screen-after-input.ppm
 x86> quit
 ```
 
-`prepare` and `run` return a typed `BackendUnavailable` error until an `ExecutionBackend` is attached. This is intentional: the library never reports a guest as running when no CPU/device backend exists.
+The native console also supports `run-state`, `dump-screen <path.ppm>` and `type <text>`. `dump-screen` writes a standard PPM framebuffer that can be opened by macOS Preview, ImageMagick or converted to PNG; `type` injects PC AT keyboard scancodes and appends Enter. `prepare` and `run` return a typed `BackendUnavailable` error until an `ExecutionBackend` is attached. This is intentional: the library never reports a guest as running when no CPU/device backend exists.
 
 ## Architecture
 

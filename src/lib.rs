@@ -35,6 +35,8 @@ pub fn native_capabilities() -> &'static [&'static str] {
         "bootloader-https",
         "saved-state-v86-v6",
         "console-host-api",
+        "vga-framebuffer-ppm",
+        "ps2-keyboard-input",
         "backend-trait",
         "native-v86-interpreter",
         "no-webassembly-runtime",

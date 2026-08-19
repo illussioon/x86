@@ -7,6 +7,23 @@ use std::time::Instant;
 
 static START: OnceLock<Instant> = OnceLock::new();
 static UART0: OnceLock<Mutex<UartState>> = OnceLock::new();
+static PS2: OnceLock<Mutex<Ps2State>> = OnceLock::new();
+
+#[derive(Default)]
+struct Ps2State {
+    output: VecDeque<u8>,
+    command_byte: u8,
+    pending_command: u8,
+}
+
+fn ps2() -> &'static Mutex<Ps2State> {
+    PS2.get_or_init(|| {
+        Mutex::new(Ps2State {
+            command_byte: 0x01,
+            ..Ps2State::default()
+        })
+    })
+}
 
 #[derive(Default)]
 struct UartState {
@@ -26,6 +43,134 @@ struct UartState {
 
 fn uart0() -> &'static Mutex<UartState> {
     UART0.get_or_init(|| Mutex::new(UartState::default()))
+}
+
+fn ps2_read(port: i32) -> Option<i32> {
+    let mut controller = ps2().lock().ok()?;
+    match port {
+        0x60 => {
+            let value = controller.output.pop_front().unwrap_or(0);
+            let more = !controller.output.is_empty();
+            drop(controller);
+            unsafe {
+                crate::cpu::cpu::device_lower_irq(1);
+                if more {
+                    crate::cpu::cpu::device_raise_irq(1);
+                }
+            }
+            Some(value as i32)
+        }
+        0x64 => Some(if controller.output.is_empty() { 0 } else { 1 }),
+        _ => None,
+    }
+}
+
+fn ps2_write(port: i32, value: i32) -> bool {
+    let Ok(mut controller) = ps2().lock() else {
+        return false;
+    };
+    match port {
+        0x64 => {
+            controller.pending_command = value as u8;
+            true
+        }
+        0x60 => {
+            if controller.pending_command == 0x60 {
+                controller.command_byte = value as u8;
+            }
+            controller.pending_command = 0;
+            true
+        }
+        _ => false,
+    }
+}
+
+fn keycode_for_ascii(byte: u8) -> Option<(u8, bool)> {
+    let upper = byte.to_ascii_uppercase();
+    let shifted = byte.is_ascii_uppercase();
+    let code = match upper {
+        b'A' => 0x1E,
+        b'B' => 0x30,
+        b'C' => 0x2E,
+        b'D' => 0x20,
+        b'E' => 0x12,
+        b'F' => 0x21,
+        b'G' => 0x22,
+        b'H' => 0x23,
+        b'I' => 0x17,
+        b'J' => 0x24,
+        b'K' => 0x25,
+        b'L' => 0x26,
+        b'M' => 0x32,
+        b'N' => 0x31,
+        b'O' => 0x18,
+        b'P' => 0x19,
+        b'Q' => 0x10,
+        b'R' => 0x13,
+        b'S' => 0x1F,
+        b'T' => 0x14,
+        b'U' => 0x16,
+        b'V' => 0x2F,
+        b'W' => 0x11,
+        b'X' => 0x2D,
+        b'Y' => 0x15,
+        b'Z' => 0x2C,
+        b'1' | b'!' => 0x02,
+        b'2' | b'@' => 0x03,
+        b'3' | b'#' => 0x04,
+        b'4' | b'$' => 0x05,
+        b'5' | b'%' => 0x06,
+        b'6' | b'^' => 0x07,
+        b'7' | b'&' => 0x08,
+        b'8' | b'*' => 0x09,
+        b'9' | b'(' => 0x0A,
+        b'0' | b')' => 0x0B,
+        b'-' | b'_' => 0x0C,
+        b'=' | b'+' => 0x0D,
+        b'[' | b'{' => 0x1A,
+        b']' | b'}' => 0x1B,
+        b';' | b':' => 0x27,
+        b'\'' | b'"' => 0x28,
+        b'`' | b'~' => 0x29,
+        b'\\' | b'|' => 0x2B,
+        b',' | b'<' => 0x33,
+        b'.' | b'>' => 0x34,
+        b'/' | b'?' => 0x35,
+        b' ' => 0x39,
+        b'\n' | b'\r' => 0x1C,
+        b'\t' => 0x0F,
+        8 => 0x0E,
+        _ => return None,
+    };
+    let shifted = shifted
+        || matches!(byte, b'!'..=b'&' | b'('..=b'+' | b':' | b'<'..=b'>' | b'?' | b'@' | b'^' | b'_' | b'{' | b'|' | b'}' | b'~' | b'"');
+    Some((code, shifted))
+}
+
+pub fn inject_keyboard_text(text: &str) -> usize {
+    let Ok(mut controller) = ps2().lock() else {
+        return 0;
+    };
+    let mut count = 0;
+    for byte in text.bytes() {
+        let Some((code, shifted)) = keycode_for_ascii(byte) else {
+            continue;
+        };
+        if shifted {
+            controller.output.push_back(0x2A);
+        }
+        controller.output.push_back(code);
+        controller.output.push_back(code | 0x80);
+        if shifted {
+            controller.output.push_back(0xAA);
+        }
+        count += 1;
+    }
+    drop(controller);
+    if count > 0 {
+        unsafe { crate::cpu::cpu::device_raise_irq(1) };
+    }
+    count
 }
 
 fn uart_read(port: i32) -> i32 {
@@ -159,7 +304,9 @@ pub extern "C" fn get_rand_int() -> i32 {
 
 #[no_mangle]
 pub extern "C" fn io_port_read8(port: i32) -> i32 {
-    if let Some(value) = native_devices::io_read8(port) {
+    if let Some(value) = ps2_read(port) {
+        value
+    } else if let Some(value) = native_devices::io_read8(port) {
         value
     } else if (0x3F8..=0x3FF).contains(&port) {
         uart_read(port)
@@ -180,7 +327,10 @@ pub extern "C" fn io_port_read32(port: i32) -> i32 {
 
 #[no_mangle]
 pub extern "C" fn io_port_write8(port: i32, value: i32) {
-    if !native_devices::io_write8(port, value) && (0x3F8..=0x3FF).contains(&port) {
+    if !ps2_write(port, value)
+        && !native_devices::io_write8(port, value)
+        && (0x3F8..=0x3FF).contains(&port)
+    {
         uart_write(port, value);
     }
 }
@@ -236,6 +386,10 @@ pub struct NativeCpu {
     ram_bytes: u32,
     vga_bytes: u32,
     last_timer_tick: Instant,
+    screen_width: u32,
+    screen_height: u32,
+    screen_bpp: u32,
+    graphical_mode: bool,
 }
 
 impl NativeCpu {
@@ -258,6 +412,10 @@ impl NativeCpu {
             ram_bytes,
             vga_bytes,
             last_timer_tick: Instant::now(),
+            screen_width: 80,
+            screen_height: 25,
+            screen_bpp: 0,
+            graphical_mode: false,
         }
     }
 
@@ -328,6 +486,32 @@ impl NativeCpu {
 
     pub fn state_arena(&self) -> &[u8; 4096] {
         &self.state_arena
+    }
+
+    /// Return the restored SVGA framebuffer as packed RGB bytes.
+    /// The native runtime keeps the framebuffer in the same guest-visible
+    /// backing store used by v86's LFB mapping.
+    pub fn vga_framebuffer_rgb(&self) -> Option<(u32, u32, Vec<u8>)> {
+        if !self.graphical_mode || self.screen_width == 0 || self.screen_height == 0 {
+            return None;
+        }
+        let pixels = (self.screen_width as usize).checked_mul(self.screen_height as usize)?;
+        let mut output = vec![0u8; pixels.checked_mul(3)?];
+        unsafe {
+            if memory::vga_mem8.is_null() || self.screen_bpp != 32 {
+                return None;
+            }
+            let source_len = pixels.checked_mul(4)?;
+            if source_len > self.vga_bytes as usize {
+                return None;
+            }
+            let source = std::slice::from_raw_parts(memory::vga_mem8, source_len);
+            for (index, rgb) in output.chunks_exact_mut(3).enumerate() {
+                let pixel = &source[index * 4..index * 4 + 4];
+                rgb.copy_from_slice(&[pixel[2], pixel[1], pixel[0]]);
+            }
+        }
+        Some((self.screen_width, self.screen_height, output))
     }
 
     pub fn set_9p_root(&mut self, path: impl AsRef<std::path::Path>) -> Result<(), String> {
@@ -468,6 +652,46 @@ impl NativeCpu {
         if slots.get(63).is_some_and(|value| !value.is_null()) {
             let ioapic_state = buffer_for(slots, buffers, 63)?;
             ioapic::restore_state_bytes(ioapic_state)?;
+        }
+
+        if let Some(vga_state) = slots.get(52).and_then(serde_json::Value::as_array) {
+            self.screen_width = vga_state
+                .get(15)
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(0) as u32;
+            self.screen_height = vga_state
+                .get(16)
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(0) as u32;
+            self.screen_bpp = vga_state
+                .get(19)
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(0) as u32;
+            self.graphical_mode = vga_state
+                .get(9)
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            if let Some(value) = vga_state.get(39) {
+                let buffer_id = value
+                    .get("buffer_id")
+                    .and_then(serde_json::Value::as_u64)
+                    .ok_or_else(|| "VGA state[39] is not a typed buffer".to_owned())?
+                    as usize;
+                let svga = buffers
+                    .get(buffer_id)
+                    .ok_or_else(|| format!("VGA buffer id {buffer_id} is out of range"))?;
+                let vga_len = self.vga_bytes as usize;
+                if svga.len() > vga_len {
+                    return Err(format!(
+                        "VGA framebuffer {} exceeds allocated {} bytes",
+                        svga.len(),
+                        vga_len
+                    ));
+                }
+                unsafe {
+                    std::ptr::copy_nonoverlapping(svga.as_ptr(), memory::vga_mem8, svga.len());
+                }
+            }
         }
 
         unsafe {
@@ -654,4 +878,29 @@ fn copy_u64_buffer(
     target: &mut [u8],
 ) -> Result<(), String> {
     copy_buffer(state, buffers, index, target)
+}
+
+#[cfg(test)]
+mod keyboard_tests {
+    use super::keycode_for_ascii;
+
+    #[test]
+    fn maps_lowercase_without_shift() {
+        assert_eq!(keycode_for_ascii(b'a'), Some((0x1E, false)));
+        assert_eq!(keycode_for_ascii(b'z'), Some((0x2C, false)));
+    }
+
+    #[test]
+    fn maps_uppercase_and_punctuation_with_shift() {
+        assert_eq!(keycode_for_ascii(b'A'), Some((0x1E, true)));
+        assert_eq!(keycode_for_ascii(b'!'), Some((0x02, true)));
+        assert_eq!(keycode_for_ascii(b'_'), Some((0x0C, true)));
+    }
+
+    #[test]
+    fn maps_shell_control_characters() {
+        assert_eq!(keycode_for_ascii(b' '), Some((0x39, false)));
+        assert_eq!(keycode_for_ascii(b'\n'), Some((0x1C, false)));
+        assert_eq!(keycode_for_ascii(b'\t'), Some((0x0F, false)));
+    }
 }

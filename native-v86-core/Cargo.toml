@@ -1,6 +1,6 @@
 [package]
 name = "native-v86-core"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 authors = ["x86 contributors"]
 description = "Native Rust x86 CPU interpreter core ported from v86"

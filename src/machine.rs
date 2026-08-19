@@ -119,6 +119,19 @@ pub trait ExecutionBackend: Send {
     fn step(&mut self) -> Result<bool>;
     fn read_memory(&self, address: u64, buffer: &mut [u8]) -> Result<()>;
     fn write_memory(&mut self, address: u64, data: &[u8]) -> Result<()>;
+
+    /// Return the current guest framebuffer as packed RGB bytes when the
+    /// backend exposes a graphical VGA mode.
+    fn vga_framebuffer_rgb(&self) -> Option<(u32, u32, Vec<u8>)> {
+        None
+    }
+
+    /// Queue host text as guest keyboard input when supported by the backend.
+    fn inject_text(&mut self, _text: &str) -> Result<usize> {
+        Err(X86Error::BackendUnavailable(
+            "guest keyboard input is not supported by this backend".to_owned(),
+        ))
+    }
 }
 
 pub struct Machine {
@@ -316,6 +329,17 @@ impl Machine {
             steps,
             halted: false,
         })
+    }
+
+    pub fn vga_framebuffer_rgb(&self) -> Option<(u32, u32, Vec<u8>)> {
+        self.backend.as_ref()?.vga_framebuffer_rgb()
+    }
+
+    pub fn inject_text(&mut self, text: &str) -> Result<usize> {
+        self.backend
+            .as_mut()
+            .ok_or_else(|| X86Error::BackendUnavailable("no ExecutionBackend attached".to_owned()))?
+            .inject_text(text)
     }
 
     pub fn stop(&mut self) {
