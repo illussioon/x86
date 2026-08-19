@@ -33,6 +33,10 @@ struct Virtio9p {
     queue: Queue,
     status: u8,
     isr: u8,
+    device_feature_select: u32,
+    driver_feature_select: u32,
+    driver_feature: u32,
+    queue_select: u16,
     tag: Vec<u8>,
     root: Option<PathBuf>,
     fids: HashMap<u32, Fid>,
@@ -47,6 +51,10 @@ impl Default for Virtio9p {
             },
             status: 0,
             isr: 0,
+            device_feature_select: 0,
+            driver_feature_select: 0,
+            driver_feature: 0,
+            queue_select: 0,
             tag: b"host9p".to_vec(),
             root: None,
             fids: HashMap::new(),
@@ -171,6 +179,18 @@ pub fn mmio_write32(addr: u32, value: i32) -> bool {
 
 pub fn io_read16(port: i32) -> Option<i32> {
     let b = bus().lock().ok()?;
+    if (VIRTIO_9P_COMMON..VIRTIO_9P_COMMON + 0x40).contains(&port) {
+        let off = port - VIRTIO_9P_COMMON;
+        return Some(match off {
+            20 => b.ninep.status as i32,
+            22 => b.ninep.queue_select as i32,
+            24 => b.ninep.queue.size as i32,
+            26 => 0xFFFF,
+            28 => b.ninep.queue.enabled as i32,
+            30 => 0,
+            _ => 0,
+        });
+    }
     if (PCI_CONFIG_ADDRESS..PCI_CONFIG_ADDRESS + 3).contains(&port) {
         return Some(((b.pci_address >> (8 * (port - PCI_CONFIG_ADDRESS))) & 0xFFFF) as i32);
     }
@@ -184,6 +204,21 @@ pub fn io_read16(port: i32) -> Option<i32> {
 
 pub fn io_read32(port: i32) -> Option<i32> {
     let b = bus().lock().ok()?;
+    if (VIRTIO_9P_COMMON..VIRTIO_9P_COMMON + 0x40).contains(&port) {
+        let off = port - VIRTIO_9P_COMMON;
+        return Some(match off {
+            0 => 0,
+            4 => 0,
+            8 => b.ninep.driver_feature_select as i32,
+            12 => b.ninep.driver_feature as i32,
+            20 => b.ninep.status as i32,
+            24 => b.ninep.queue.size as i32,
+            32 => b.ninep.queue.desc as i32,
+            40 => b.ninep.queue.avail as i32,
+            48 => b.ninep.queue.used as i32,
+            _ => 0,
+        });
+    }
     if port == PCI_CONFIG_DATA {
         return Some(pci_config_read(b.pci_address) as i32);
     }
@@ -220,10 +255,21 @@ pub fn io_write8(port: i32, value: i32) -> bool {
     false
 }
 
-pub fn io_write16(port: i32, _value: i32) -> bool {
+pub fn io_write16(port: i32, value: i32) -> bool {
     if port == VIRTIO_9P_NOTIFY {
         process_queue();
         return true;
+    }
+    if let Ok(mut b) = bus().lock() {
+        if (VIRTIO_9P_COMMON..VIRTIO_9P_COMMON + 0x40).contains(&port) {
+            match port - VIRTIO_9P_COMMON {
+                22 => b.ninep.queue_select = value as u16,
+                24 => b.ninep.queue.size = (value as u16).min(32),
+                28 => b.ninep.queue.enabled = value as u16 == 1,
+                _ => {}
+            }
+            return true;
+        }
     }
     false
 }
@@ -232,6 +278,18 @@ pub fn io_write32(port: i32, value: i32) -> bool {
     if let Ok(mut b) = bus().lock() {
         if port == PCI_CONFIG_ADDRESS {
             b.pci_address = value as u32;
+            return true;
+        }
+        if (VIRTIO_9P_COMMON..VIRTIO_9P_COMMON + 0x40).contains(&port) {
+            match port - VIRTIO_9P_COMMON {
+                0 => b.ninep.device_feature_select = value as u32,
+                8 => b.ninep.driver_feature_select = value as u32,
+                12 => b.ninep.driver_feature = value as u32,
+                32 => b.ninep.queue.desc = value as u32,
+                40 => b.ninep.queue.avail = value as u32,
+                48 => b.ninep.queue.used = value as u32,
+                _ => {}
+            }
             return true;
         }
     }
@@ -531,5 +589,29 @@ mod pci_tests {
         assert!(io_write32(PCI_CONFIG_ADDRESS, 0x8000_0010u32 as i32).to_owned());
         let bar = io_read32(PCI_CONFIG_DATA).expect("PCI BAR");
         assert_eq!(bar as u32, 0x0000_A001);
+    }
+
+    #[test]
+    fn virtio_common_queue_registers_round_trip() {
+        assert!(io_write16(VIRTIO_9P_COMMON + 22, 0));
+        assert!(io_write16(VIRTIO_9P_COMMON + 24, 16));
+        assert!(io_write32(VIRTIO_9P_COMMON + 32, 0x0010_0000));
+        assert!(io_write32(VIRTIO_9P_COMMON + 40, 0x0010_0200));
+        assert!(io_write32(VIRTIO_9P_COMMON + 48, 0x0010_0280));
+        assert_eq!(io_read16(VIRTIO_9P_COMMON + 24).unwrap(), 16);
+        assert_eq!(
+            io_read32(VIRTIO_9P_COMMON + 32).unwrap() as u32,
+            0x0010_0000
+        );
+        assert_eq!(
+            io_read32(VIRTIO_9P_COMMON + 40).unwrap() as u32,
+            0x0010_0200
+        );
+        assert_eq!(
+            io_read32(VIRTIO_9P_COMMON + 48).unwrap() as u32,
+            0x0010_0280
+        );
+        assert!(io_write16(VIRTIO_9P_COMMON + 28, 1));
+        assert_eq!(io_read16(VIRTIO_9P_COMMON + 28).unwrap(), 1);
     }
 }
