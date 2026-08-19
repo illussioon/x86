@@ -1,5 +1,9 @@
 use std::io::{self, BufRead, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+#[path = "../terminal_runtime.rs"]
+mod terminal_runtime;
+use terminal_runtime::{run_interactive, run_script};
 
 #[cfg(feature = "native-runtime")]
 use x86::NativeBackend;
@@ -7,7 +11,7 @@ use x86::{Bootloader, Image, ImageKind, Machine, MachineConfig, Resource, SavedS
 
 fn print_help() {
     println!(
-        "Commands:\n  help                         Show this help\n  capabilities                Show native capabilities\n  info                        Show machine configuration and attached images\n  config ram <bytes>          Set guest RAM size\n  config vga <bytes>          Set VGA memory size\n  load bios <path>             Load BIOS image\n  load vga-bios <path>         Load VGA BIOS image\n  load disk <path>             Load raw disk image\n  load cdrom <path>            Load ISO/CD-ROM image\n  load state <path>            Load v86 saved state (.bin or .bin.zst)\n  load bootloader <path|url>   Load a bootloader from disk or HTTP(S)\n  checksum <kind>              Print SHA-256 for bios/vga-bios/disk/cdrom/bootloader/state\n  prepare                     Validate backend readiness\n  run                         Run the attached native backend\n  run-state [max_steps]       Restore and run the loaded v86 saved state\n  dump-screen <path.ppm>      Save the current guest VGA framebuffer as PPM\n  screen                      Render the guest screen directly in this terminal\n  type <text>                 Send text and Enter to the guest keyboard\n  quit                        Exit"
+        "Commands:\n  help                         Show this help\n  capabilities                Show native capabilities\n  info                        Show machine configuration and attached images\n  config ram <bytes>          Set guest RAM size\n  config vga <bytes>          Set VGA memory size\n  load bios <path>             Load BIOS image\n  load vga-bios <path>         Load VGA BIOS image\n  load disk <path>             Load raw disk image\n  load cdrom <path>            Load ISO/CD-ROM image\n  load state <path>            Load v86 saved state (.bin or .bin.zst)\n  load bootloader <path|url>   Load a bootloader from disk or HTTP(S)\n  checksum <kind>              Print SHA-256 for bios/vga-bios/disk/cdrom/bootloader/state\n  prepare                     Validate backend readiness\n  run                         Run the attached native backend\n  run-state [max_steps]       Restore and run the loaded v86 saved state\n  dump-screen <path.ppm>      Save the current guest VGA framebuffer as PPM\n  screen                      Render the guest screen directly in this terminal\n  type <text>                 Send text and Enter to the guest keyboard\n  quit                        Exit\n\nNon-interactive modes:\n  x86-console --script <file>                 Run a host/emulator script\n  x86-console --console --state <path>       Start persistent terminal console"
     );
 }
 
@@ -121,157 +125,7 @@ fn dump_screen(machine: &Machine, path: &str) -> Result<(), X86Error> {
     Ok(())
 }
 
-const ANSI_CGA: [(u8, u8, u8); 16] = [
-    (0, 0, 0),
-    (0, 0, 170),
-    (0, 170, 0),
-    (0, 170, 170),
-    (170, 0, 0),
-    (170, 0, 170),
-    (170, 85, 0),
-    (170, 170, 170),
-    (85, 85, 85),
-    (85, 85, 255),
-    (85, 255, 85),
-    (85, 255, 255),
-    (255, 85, 85),
-    (255, 85, 255),
-    (255, 255, 85),
-    (255, 255, 255),
-];
-
-fn printable_guest_char(byte: u8) -> char {
-    match byte {
-        0x20..=0x7E => byte as char,
-        0x09 => ' ',
-        _ => ' ',
-    }
-}
-
-fn render_vga_text(machine: &Machine) -> bool {
-    let Some((cols, rows, bytes)) = machine.vga_text_snapshot() else {
-        return false;
-    };
-    let cells = cols as usize * rows as usize;
-    if bytes.len() < cells * 2 {
-        return false;
-    }
-
-    print!("\x1b[2J\x1b[H");
-    for row in 0..rows as usize {
-        for col in 0..cols as usize {
-            let index = (row * cols as usize + col) * 2;
-            let ch = printable_guest_char(bytes[index]);
-            let attr = bytes[index + 1];
-            let fg = ANSI_CGA[(attr & 0x0F) as usize];
-            let bg = ANSI_CGA[((attr >> 4) & 0x07) as usize];
-            print!(
-                "\x1b[38;2;{};{};{}m\x1b[48;2;{};{};{}m{}",
-                fg.0, fg.1, fg.2, bg.0, bg.1, bg.2, ch
-            );
-        }
-        print!("\x1b[0m\r\n");
-    }
-    print!("\x1b[0m");
-    let _ = io::stdout().flush();
-    true
-}
-
-fn average_rgb(
-    pixels: &[u8],
-    width: usize,
-    height: usize,
-    x0: usize,
-    x1: usize,
-    y0: usize,
-    y1: usize,
-) -> (u8, u8, u8) {
-    let mut sums = [0u64; 3];
-    let mut count = 0u64;
-    let x_end = x1.max(x0 + 1).min(width);
-    let y_end = y1.max(y0 + 1).min(height);
-    for y in y0.min(height)..y_end {
-        for x in x0.min(width)..x_end {
-            let offset = (y * width + x) * 3;
-            if offset + 2 < pixels.len() {
-                sums[0] += pixels[offset] as u64;
-                sums[1] += pixels[offset + 1] as u64;
-                sums[2] += pixels[offset + 2] as u64;
-                count += 1;
-            }
-        }
-    }
-    if count == 0 {
-        return (0, 0, 0);
-    }
-    (
-        (sums[0] / count) as u8,
-        (sums[1] / count) as u8,
-        (sums[2] / count) as u8,
-    )
-}
-
-fn render_vga_graphics(machine: &Machine) -> bool {
-    let Some((width, height, pixels)) = machine.vga_framebuffer_rgb() else {
-        return false;
-    };
-    let source_width = width as usize;
-    let source_height = height as usize;
-    if source_width == 0 || source_height == 0 || pixels.len() != source_width * source_height * 3 {
-        return false;
-    }
-
-    // 128 columns x 48 rows; each Unicode half block represents two vertically
-    // stacked source regions, preserving the Arch framebuffer's terminal glyphs.
-    // Override with X86_TERM_COLS/X86_TERM_ROWS for a different terminal size.
-    let out_cols = std::env::var("X86_TERM_COLS")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .filter(|value| (40..=240).contains(value))
-        .unwrap_or(128);
-    let out_rows = std::env::var("X86_TERM_ROWS")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .filter(|value| (12..=120).contains(value))
-        .unwrap_or(48);
-    print!("\x1b[2J\x1b[H");
-    for row in 0..out_rows {
-        let top_y0 = row * source_height / (out_rows * 2);
-        let top_y1 = (row + 1) * source_height / (out_rows * 2);
-        let bottom_y0 = (row + 1) * source_height / (out_rows * 2);
-        let bottom_y1 = (row + 2) * source_height / (out_rows * 2);
-        for col in 0..out_cols {
-            let x0 = col * source_width / out_cols;
-            let x1 = (col + 1) * source_width / out_cols;
-            let top = average_rgb(&pixels, source_width, source_height, x0, x1, top_y0, top_y1);
-            let bottom = average_rgb(
-                &pixels,
-                source_width,
-                source_height,
-                x0,
-                x1,
-                bottom_y0,
-                bottom_y1,
-            );
-            print!(
-                "\x1b[38;2;{};{};{}m\x1b[48;2;{};{};{}m▀",
-                top.0, top.1, top.2, bottom.0, bottom.1, bottom.2
-            );
-        }
-        print!("\x1b[0m\r\n");
-    }
-    print!("\x1b[0m");
-    let _ = io::stdout().flush();
-    true
-}
-
-fn render_screen(machine: &Machine) {
-    if !render_vga_text(machine) && !render_vga_graphics(machine) {
-        println!("guest screen is not available yet; run the machine first");
-    }
-}
-
-fn main() -> Result<(), X86Error> {
+fn new_machine() -> Machine {
     let mut machine = Machine::new(MachineConfig::default());
     #[cfg(feature = "native-runtime")]
     {
@@ -281,6 +135,38 @@ fn main() -> Result<(), X86Error> {
         };
         machine.attach_backend(backend);
     }
+    machine
+}
+
+fn main() -> Result<(), X86Error> {
+    let args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if args.first().is_some_and(|value| value == "--script") {
+        let path = args.get(1).ok_or_else(|| {
+            X86Error::InvalidImage("usage: x86-console --script <file>".to_owned())
+        })?;
+        let mut machine = new_machine();
+        return run_script(&mut machine, Path::new(path));
+    }
+    if args.first().is_some_and(|value| value == "--console") {
+        let mut machine = new_machine();
+        let mut index = 1;
+        while index < args.len() {
+            if args[index] == "--state" {
+                let path = args.get(index + 1).ok_or_else(|| {
+                    X86Error::InvalidImage("usage: --console --state <path>".to_owned())
+                })?;
+                machine.load_saved_state(Resource::file(PathBuf::from(path)))?;
+                index += 2;
+            } else {
+                return Err(X86Error::InvalidImage(format!(
+                    "unknown --console option: {:?}",
+                    args[index]
+                )));
+            }
+        }
+        return run_interactive(&mut machine);
+    }
+    let mut machine = new_machine();
     println!("x86 native console v{}", x86::API_VERSION);
     println!("No browser or WebAssembly runtime is used. Type `help` for commands.");
     print!("x86> ");
@@ -392,10 +278,6 @@ fn main() -> Result<(), X86Error> {
                 })?;
                 dump_screen(&machine, path)
             }
-            "screen" => {
-                render_screen(&machine);
-                Ok(())
-            }
             "type" => {
                 let text = parts.collect::<Vec<_>>().join(" ");
                 let count = machine.inject_text(&format!("{text}\n"))?;
@@ -441,7 +323,7 @@ fn main() -> Result<(), X86Error> {
                                 "run finished: {} steps, halted={}",
                                 report.steps, report.halted
                             );
-                            render_screen(&machine);
+                            terminal_runtime::render_screen(&machine);
                             Ok(())
                         }
                         Err(error) => {

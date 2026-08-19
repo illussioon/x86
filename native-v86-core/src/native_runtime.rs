@@ -3,6 +3,7 @@ use crate::native_devices;
 use std::collections::VecDeque;
 use std::io::Write;
 use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 static START: OnceLock<Instant> = OnceLock::new();
@@ -11,6 +12,11 @@ static PS2: OnceLock<Mutex<Ps2State>> = OnceLock::new();
 static PIT: OnceLock<Mutex<PitState>> = OnceLock::new();
 static RTC: OnceLock<Mutex<RtcState>> = OnceLock::new();
 static VGA_TEXT: OnceLock<Mutex<Vec<u8>>> = OnceLock::new();
+static UART_OUTPUT_ENABLED: AtomicBool = AtomicBool::new(true);
+
+pub fn set_uart_output_enabled(enabled: bool) {
+    UART_OUTPUT_ENABLED.store(enabled, Ordering::Relaxed);
+}
 
 fn vga_text_memory() -> &'static Mutex<Vec<u8>> {
     VGA_TEXT.get_or_init(|| Mutex::new(vec![0; 0x40000]))
@@ -561,6 +567,9 @@ fn uart_write(port: i32, value: i32) {
         }
     }
     if let Some(byte) = output {
+        if !UART_OUTPUT_ENABLED.load(Ordering::Relaxed) {
+            return;
+        }
         let mut stdout = std::io::stdout().lock();
         let _ = stdout.write_all(&[byte]);
         let _ = stdout.flush();

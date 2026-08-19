@@ -1,0 +1,9 @@
+# Download and execute a host binary while the guest keeps running.
+# The first server is the HTTP source; replace this URL with your own HTTPS URL.
+download http://127.0.0.1:18080/remote-server ./downloaded-server
+exec ./downloaded-server --port 18082
+load state ../macos-bundle/image/arch_state-v3.bin.zst
+run-state 1000000
+type echo server-script-ok
+background 25000 2
+stop

@@ -451,6 +451,11 @@ unsafe fn string_instruction(
                 _ => {},
             };
 
+            // A REP instruction with an exhausted counter may re-enter this
+            // slow path after a page boundary. Never wrap the unsigned count.
+            if count == 0 {
+                break;
+            }
             count -= 1;
 
             let finished = match rep {

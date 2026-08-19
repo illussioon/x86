@@ -118,13 +118,27 @@ x86> dump-screen ./arch-screen-after-input.ppm
 x86> quit
 ```
 
-The native console also supports `run-state`, `dump-screen <path.ppm>` and `type <text>`. `dump-screen` writes a standard PPM framebuffer that can be opened by macOS Preview, ImageMagick or converted to PNG; `type` injects PC AT keyboard scancodes and appends Enter. `prepare` and `run` return a typed `BackendUnavailable` error until an `ExecutionBackend` is attached. This is intentional: the library never reports a guest as running when no CPU/device backend exists.
+The native console supports two launch modes. The ordinary REPL is useful for command-driven diagnostics. The persistent TTY mode keeps the guest running continuously, switches to a portable raw terminal screen, reads keyboard events, and exits cleanly with `Esc` or `Ctrl-C`:
+
+```bash
+cargo run --release --bin x86-console -- --console --state ./image/arch_state-v3.bin.zst
+```
+
+The script mode executes deterministic host/emulator commands. A script can download a file over HTTP(S), launch an explicitly requested host process in the background, load a guest saved state, inject keyboard input, and continue guest execution:
+
+```bash
+cargo run --release --bin x86-console -- --script examples/download-and-run-server.x86
+```
+
+The example is intentionally bounded by `background 25000 2`; omit the final duration for a persistent guest loop. `wait` waits for spawned host processes, while `stop` leaves them running after the script exits. `exec` is explicit by design because it runs a host executable downloaded from the specified URL.
+
+The ANSI renderer uses the exact VGA text plane when available. Graphical VGA states use a compact colored Unicode Braille representation, which preserves glyph shapes and avoids the horizontal banding caused by full-cell background blocks. `X86_TERM_COLS` and `X86_TERM_ROWS` override the detected terminal size. `dump-screen <path.ppm>` remains available for pixel-level framebuffer captures, and `type <text>` remains available in the REPL.
 
 ## Architecture
 
 ![x86-native architecture](docs/assets/architecture.png)
 
-The source diagram is available as [`docs/assets/architecture.mmd`](docs/assets/architecture.mmd). The host layer is platform-neutral; platform-specific console, filesystem and networking adapters remain outside the core API.
+The source diagram is available as [`docs/assets/architecture.mmd`](docs/assets/architecture.mmd). The host layer is platform-neutral; platform-specific console, filesystem and networking adapters remain outside the core API. See [`examples/download-and-run-server.x86`](examples/download-and-run-server.x86) for the script DSL and [`docs/install-from-zero-ru.md`](docs/install-from-zero-ru.md) for installation commands.
 
 ## Releases
 
