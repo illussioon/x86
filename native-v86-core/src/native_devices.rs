@@ -142,6 +142,26 @@ pub fn io_read8(port: i32) -> Option<i32> {
     None
 }
 
+pub fn mmio_read8(addr: u32) -> Option<i32> {
+    io_read8(addr as i32)
+}
+
+pub fn mmio_read32(addr: u32) -> Option<i32> {
+    io_read32(addr as i32)
+}
+
+pub fn mmio_write8(addr: u32, value: i32) -> bool {
+    io_write8(addr as i32, value)
+}
+
+pub fn mmio_write16(addr: u32, value: i32) -> bool {
+    io_write16(addr as i32, value)
+}
+
+pub fn mmio_write32(addr: u32, value: i32) -> bool {
+    io_write32(addr as i32, value)
+}
+
 pub fn io_read32(port: i32) -> Option<i32> {
     let b = bus().lock().ok()?;
     if port == PCI_CONFIG_DATA {
@@ -473,5 +493,21 @@ mod tests {
         assert_eq!(response[4], 117);
         assert_eq!(&response[7 + 4..7 + 9], b"hello");
         let _ = std::fs::remove_dir_all(root);
+    }
+}
+
+#[cfg(test)]
+mod pci_tests {
+    use super::*;
+
+    #[test]
+    fn pci_config_exposes_virtio_9p_identity() {
+        assert!(io_write32(PCI_CONFIG_ADDRESS, 0x8000_0000u32 as i32).to_owned());
+        let id = io_read32(PCI_CONFIG_DATA).expect("PCI data port");
+        assert_eq!(id as u32, 0x1009_1AF4);
+
+        assert!(io_write32(PCI_CONFIG_ADDRESS, 0x8000_0010u32 as i32).to_owned());
+        let bar = io_read32(PCI_CONFIG_DATA).expect("PCI BAR");
+        assert_eq!(bar as u32, 0x0000_A001);
     }
 }

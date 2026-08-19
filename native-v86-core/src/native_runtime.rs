@@ -196,23 +196,29 @@ pub extern "C" fn io_port_write32(port: i32, value: i32) {
 }
 
 #[no_mangle]
-pub extern "C" fn mmap_read8(_addr: u32) -> i32 {
-    0xFF
+pub extern "C" fn mmap_read8(addr: u32) -> i32 {
+    native_devices::mmio_read8(addr).unwrap_or(0xFF)
 }
 
 #[no_mangle]
-pub extern "C" fn mmap_read32(_addr: u32) -> i32 {
-    -1
+pub extern "C" fn mmap_read32(addr: u32) -> i32 {
+    native_devices::mmio_read32(addr).unwrap_or(-1)
 }
 
 #[no_mangle]
-pub extern "C" fn mmap_write8(_addr: u32, _value: i32) {}
+pub extern "C" fn mmap_write8(addr: u32, value: i32) {
+    let _ = native_devices::mmio_write8(addr, value);
+}
 
 #[no_mangle]
-pub extern "C" fn mmap_write16(_addr: u32, _value: i32) {}
+pub extern "C" fn mmap_write16(addr: u32, value: i32) {
+    let _ = native_devices::mmio_write16(addr, value);
+}
 
 #[no_mangle]
-pub extern "C" fn mmap_write32(_addr: u32, _value: i32) {}
+pub extern "C" fn mmap_write32(addr: u32, value: i32) {
+    let _ = native_devices::mmio_write32(addr, value);
+}
 
 #[no_mangle]
 pub extern "C" fn mmap_write64(_addr: u32, _v0: i32, _v1: i32) {}
