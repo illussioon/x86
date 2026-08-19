@@ -87,7 +87,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 /*----------------------------------------------------------------------------
 *----------------------------------------------------------------------------*/
 #define SOFTFLOAT_BUILTIN_CLZ 1
+#if !defined(_MSC_VER)
 #define SOFTFLOAT_INTRINSIC_INT128 1
+#endif
 /**** start inlining opts-GCC.h ****/
 
 /*============================================================================
