@@ -10,3 +10,8 @@
 ## Current local native coverage
 
 The Rust port contains the v86 CPU/interpreter, SoftFloat, paging, SSE/FPU, APIC/IOAPIC/PIC restore, TSC and packed RAM restore, native VirtIO-9P queue/PCI transport, host-directory 9P operations, UART output, native VGA framebuffer restore/extraction, and basic PS/2 keyboard text injection. It does not yet contain a complete native model for all upstream PC devices (PIT, RTC, ACPI, DMA, PS/2 controller semantics, VGA I/O, IDE/floppy, NE2000/virtio-net, SoundBlaster, modem, and full virtio-console/balloon behavior). The Arch v86 state slot 82 (`virtio_console`) is null; the saved state is graphical VGA mode 1024x768 and its framebuffer was successfully rendered to `/tmp/arch-native-screen.png`, showing an Arch shell prompt `root@localhost:~#`.
+
+## RTC/PIT implementation references
+
+5. https://github.com/copy/v86/blob/master/src/pit.js — PIT uses ports `0x40..0x43`, channel state arrays for next-low, enabled, mode, read mode, latch, reload, start time and start value; channel 0 raises IRQ0 on rollover.
+6. https://github.com/copy/v86/blob/master/src/rtc.js — CMOS RTC uses index port `0x70` and data port `0x71`; state includes `cmos_index`, 128-byte CMOS data, clock/update timers, periodic interrupt state and CMOS status registers. The native port currently restores PIT slot 58 and has a planned RTC slot 47 implementation.

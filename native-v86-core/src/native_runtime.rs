@@ -9,6 +9,81 @@ static START: OnceLock<Instant> = OnceLock::new();
 static UART0: OnceLock<Mutex<UartState>> = OnceLock::new();
 static PS2: OnceLock<Mutex<Ps2State>> = OnceLock::new();
 static PIT: OnceLock<Mutex<PitState>> = OnceLock::new();
+static RTC: OnceLock<Mutex<RtcState>> = OnceLock::new();
+
+#[derive(Clone)]
+struct RtcState {
+    index: u8,
+    data: [u8; 128],
+    status_a: u8,
+    status_b: u8,
+    status_c: u8,
+    status_d: u8,
+    nmi_disabled: bool,
+}
+
+impl Default for RtcState {
+    fn default() -> Self {
+        let mut data = [0u8; 128];
+        data[0x0A] = 0x26;
+        data[0x0B] = 0x02;
+        data[0x0D] = 0x80;
+        Self {
+            index: 0,
+            data,
+            status_a: 0x26,
+            status_b: 0x02,
+            status_c: 0,
+            status_d: 0x80,
+            nmi_disabled: false,
+        }
+    }
+}
+
+fn rtc() -> &'static Mutex<RtcState> {
+    RTC.get_or_init(|| Mutex::new(RtcState::default()))
+}
+
+fn rtc_read(port: i32) -> Option<i32> {
+    let state = rtc().lock().ok()?;
+    match port {
+        0x71 => Some(match state.index & 0x7F {
+            0x0A => state.status_a,
+            0x0B => state.status_b,
+            0x0C => state.status_c,
+            0x0D => state.status_d,
+            index => state.data[index as usize],
+        } as i32),
+        0x70 => Some(state.index as i32 | if state.nmi_disabled { 0x80 } else { 0 }),
+        _ => None,
+    }
+}
+
+fn rtc_write(port: i32, value: i32) -> bool {
+    let Ok(mut state) = rtc().lock() else {
+        return false;
+    };
+    match port {
+        0x70 => {
+            let byte = value as u8;
+            state.index = byte & 0x7F;
+            state.nmi_disabled = byte & 0x80 != 0;
+            true
+        }
+        0x71 => {
+            let index = state.index & 0x7F;
+            let byte = value as u8;
+            match index {
+                0x0A => state.status_a = byte,
+                0x0B => state.status_b = byte,
+                0x0C | 0x0D => {}
+                _ => state.data[index as usize] = byte,
+            }
+            true
+        }
+        _ => false,
+    }
+}
 
 #[derive(Clone)]
 struct PitState {
@@ -395,6 +470,24 @@ fn nested_buffer<'a>(
         .ok_or_else(|| format!("nested buffer id {buffer_id} is out of range"))
 }
 
+fn restore_rtc_state(state: &[serde_json::Value], buffers: &[Vec<u8>]) -> Result<(), String> {
+    if state.len() < 14 {
+        return Err(format!("RTC state has {} fields; expected 14", state.len()));
+    }
+    let data = nested_buffer(state, 1, buffers)?;
+    let mut rtc = rtc().lock().map_err(|_| "RTC mutex poisoned".to_owned())?;
+    rtc.index = state[0].as_i64().unwrap_or(0) as u8;
+    rtc.data.fill(0);
+    let copy_len = data.len().min(rtc.data.len());
+    rtc.data[..copy_len].copy_from_slice(&data[..copy_len]);
+    rtc.status_a = state[8].as_i64().unwrap_or(rtc.data[0x0A] as i64) as u8;
+    rtc.status_b = state[9].as_i64().unwrap_or(rtc.data[0x0B] as i64) as u8;
+    rtc.status_c = state[10].as_i64().unwrap_or(0) as u8;
+    rtc.nmi_disabled = state[11].as_i64().unwrap_or(0) != 0;
+    rtc.status_d = rtc.data[0x0D].max(0x80);
+    Ok(())
+}
+
 fn restore_pit_state(state: &[serde_json::Value], buffers: &[Vec<u8>]) -> Result<(), String> {
     if state.len() < 9 {
         return Err(format!("PIT state has {} fields; expected 9", state.len()));
@@ -488,7 +581,9 @@ pub extern "C" fn get_rand_int() -> i32 {
 
 #[no_mangle]
 pub extern "C" fn io_port_read8(port: i32) -> i32 {
-    if let Some(value) = pit_read(port) {
+    if let Some(value) = rtc_read(port) {
+        value
+    } else if let Some(value) = pit_read(port) {
         value
     } else if let Some(value) = ps2_read(port) {
         value
@@ -513,7 +608,8 @@ pub extern "C" fn io_port_read32(port: i32) -> i32 {
 
 #[no_mangle]
 pub extern "C" fn io_port_write8(port: i32, value: i32) {
-    if !pit_write(port, value)
+    if !rtc_write(port, value)
+        && !pit_write(port, value)
         && !ps2_write(port, value)
         && !native_devices::io_write8(port, value)
         && (0x3F8..=0x3FF).contains(&port)
@@ -816,6 +912,9 @@ impl NativeCpu {
 
         if let Some(uart_state) = slots.get(54).and_then(serde_json::Value::as_array) {
             restore_uart_state(uart_state)?;
+        }
+        if let Some(rtc_state) = slots.get(47).and_then(serde_json::Value::as_array) {
+            restore_rtc_state(rtc_state, buffers)?;
         }
         if let Some(pit_state) = slots.get(58).and_then(serde_json::Value::as_array) {
             restore_pit_state(pit_state, buffers)?;
