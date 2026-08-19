@@ -118,7 +118,21 @@ pub fn restore_state(state: &serde_json::Value, buffers: &[Vec<u8>]) -> Result<(
         }
     }
     b.ninep.fids.clear();
-    if let Some(fids) = s.get(8).and_then(|v| v.as_array()) {
+    // A restored v86 fid stores an inode number, not a host pathname.  The
+    // native backend cannot safely reconstruct arbitrary inode paths, so use
+    // the configured host root for the attach fid and let subsequent Twalk
+    // requests resolve real path components below it.
+    if let Some(root) = b.ninep.root.clone() {
+        b.ninep.fids.insert(
+            0,
+            Fid {
+                path: root,
+                opened: false,
+            },
+        );
+    } else if let Some(fids) = s.get(8).and_then(|v| v.as_array()) {
+        // Without a host root, retain a diagnostic placeholder rather than
+        // silently claiming that a synthetic inode path is readable.
         for (id, fid) in fids.iter().enumerate() {
             let inode = fid.get(0).and_then(|v| v.as_i64()).unwrap_or(0);
             b.ninep.fids.insert(
@@ -458,8 +472,13 @@ fn u16_at(x: &[u8], p: &mut usize) -> u16 {
     v
 }
 fn u32_at(x: &[u8], p: &mut usize) -> u32 {
-    let v = u32::from_le_bytes([x[*p], x[*p + 1], x[*p + 2], x[*p + 3]]);
+    let v = u32::from_le_bytes(x[*p..*p + 4].try_into().unwrap());
     *p += 4;
+    v
+}
+fn u64_at(x: &[u8], p: &mut usize) -> u64 {
+    let v = u64::from_le_bytes(x[*p..*p + 8].try_into().unwrap());
+    *p += 8;
     v
 }
 fn string_at(x: &[u8], p: &mut usize) -> String {
@@ -469,6 +488,12 @@ fn string_at(x: &[u8], p: &mut usize) -> String {
     *p = e;
     s
 }
+fn string_put(out: &mut Vec<u8>, value: &str) {
+    let bytes = value.as_bytes();
+    let len = bytes.len().min(u16::MAX as usize) as u16;
+    out.extend_from_slice(&len.to_le_bytes());
+    out.extend_from_slice(&bytes[..len as usize]);
+}
 fn reply(id: u8, tag: u16, payload: &[u8]) -> Vec<u8> {
     let mut r = Vec::with_capacity(payload.len() + 7);
     r.extend_from_slice(&((payload.len() + 7) as u32).to_le_bytes());
@@ -477,6 +502,47 @@ fn reply(id: u8, tag: u16, payload: &[u8]) -> Vec<u8> {
     r.extend_from_slice(payload);
     r
 }
+
+fn append_qid(out: &mut Vec<u8>, path: &Path, metadata: &std::fs::Metadata) {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    path.to_string_lossy().hash(&mut hasher);
+    let qid_path = hasher.finish();
+    let qid_type = if metadata.is_dir() { 0x80 } else { 0 };
+    out.push(qid_type);
+    out.extend_from_slice(&0u32.to_le_bytes());
+    out.extend_from_slice(&qid_path.to_le_bytes());
+}
+
+fn append_getattr(out: &mut Vec<u8>, path: &Path, metadata: &std::fs::Metadata) {
+    // Rgetattr payload after the request mask: valid, qid, mode, uid, gid,
+    // nlink, rdev, size, blksize, blocks, four timestamp pairs, generation,
+    // and data_version.  The native backend exposes conservative portable
+    // values for uid/gid/timestamps while preserving mode and file size.
+    out.extend_from_slice(&0x1FFFu64.to_le_bytes());
+    append_qid(out, path, metadata);
+    let mut mode = if metadata.permissions().readonly() {
+        0o444u32
+    } else {
+        0o666u32
+    };
+    if metadata.is_dir() {
+        mode = 0o755;
+        mode |= 0x8000_0000;
+    }
+    out.extend_from_slice(&mode.to_le_bytes());
+    out.extend_from_slice(&0u32.to_le_bytes());
+    out.extend_from_slice(&0u32.to_le_bytes());
+    out.extend_from_slice(&1u64.to_le_bytes());
+    out.extend_from_slice(&0u64.to_le_bytes());
+    out.extend_from_slice(&metadata.len().to_le_bytes());
+    out.extend_from_slice(&8192u64.to_le_bytes());
+    out.extend_from_slice(&metadata.len().div_ceil(512).to_le_bytes());
+    for _ in 0..8 {
+        out.extend_from_slice(&0u64.to_le_bytes());
+    }
+}
+
 fn handle_9p(dev: &mut Virtio9p, req: &[u8]) -> Vec<u8> {
     if req.len() < 7 {
         return reply(6, 0, &2u32.to_le_bytes());
@@ -547,6 +613,55 @@ fn handle_9p(dev: &mut Virtio9p, req: &[u8]) -> Vec<u8> {
             let mut out = vec![0u8; 13];
             out.extend_from_slice(&8192u32.to_le_bytes());
             reply(id, tag, &out)
+        }
+        24 => {
+            let fid = u32_at(req, &mut p);
+            let _request_mask = u64_at(req, &mut p);
+            let Some(path) = dev.fids.get(&fid).map(|f| f.path.clone()) else {
+                return reply(6, tag, &2u32.to_le_bytes());
+            };
+            let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+                return reply(6, tag, &2u32.to_le_bytes());
+            };
+            let mut out = Vec::with_capacity(200);
+            append_getattr(&mut out, &path, &metadata);
+            reply(id, tag, &out)
+        }
+        40 => {
+            let fid = u32_at(req, &mut p);
+            let offset = u64_at(req, &mut p) as usize;
+            let count = u32_at(req, &mut p) as usize;
+            let Some(path) = dev.fids.get(&fid).map(|f| f.path.clone()) else {
+                return reply(6, tag, &2u32.to_le_bytes());
+            };
+            let Ok(entries) = std::fs::read_dir(&path) else {
+                return reply(6, tag, &2u32.to_le_bytes());
+            };
+            let mut payload = Vec::new();
+            for (index, entry) in entries.flatten().enumerate().skip(offset) {
+                let entry_path = entry.path();
+                let Ok(metadata) = entry.metadata() else {
+                    continue;
+                };
+                let mut item = Vec::new();
+                append_qid(&mut item, &entry_path, &metadata);
+                item.extend_from_slice(&((index + 1) as u64).to_le_bytes());
+                item.push(if metadata.is_dir() { 4 } else { 8 });
+                let name = entry.file_name().to_string_lossy().into_owned();
+                string_put(&mut item, &name);
+                if payload.len() + item.len() > count {
+                    break;
+                }
+                payload.extend_from_slice(&item);
+            }
+            let mut out = (payload.len() as u32).to_le_bytes().to_vec();
+            out.extend_from_slice(&payload);
+            reply(id, tag, &out)
+        }
+        120 => {
+            let fid = u32_at(req, &mut p);
+            dev.fids.remove(&fid);
+            reply(id, tag, &[])
         }
         8 => {
             let mut out = Vec::new();
@@ -638,6 +753,22 @@ mod tests {
         let response = handle_9p(&mut dev, &request(116, 5, &read));
         assert_eq!(response[4], 117);
         assert_eq!(&response[7 + 4..7 + 9], b"hello");
+        let mut getattr = 0u32.to_le_bytes().to_vec();
+        getattr.extend_from_slice(&0x1FFFu64.to_le_bytes());
+        let getattr_response = handle_9p(&mut dev, &request(24, 6, &getattr));
+        assert_eq!(getattr_response[4], 25);
+        assert!(getattr_response.len() >= 7 + 8 + 13 + 4);
+
+        let mut readdir = 0u32.to_le_bytes().to_vec();
+        readdir.extend_from_slice(&0u64.to_le_bytes());
+        readdir.extend_from_slice(&4096u32.to_le_bytes());
+        let readdir_response = handle_9p(&mut dev, &request(40, 7, &readdir));
+        assert_eq!(readdir_response[4], 41);
+        let readdir_count = u32::from_le_bytes(readdir_response[7..11].try_into().unwrap());
+        assert!(readdir_count > 0);
+
+        let clunk = 1u32.to_le_bytes().to_vec();
+        assert_eq!(handle_9p(&mut dev, &request(120, 8, &clunk))[4], 121);
         let _ = std::fs::remove_dir_all(root);
     }
 }
